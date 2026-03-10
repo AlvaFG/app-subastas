@@ -1,0 +1,45 @@
+{
+  "version": 1,
+  "skills": {
+    "api-security-best-practices": {
+      "source": "sickn33/antigravity-awesome-skills",
+      "sourceType": "github",
+      "computedHash": "6da90ec18bec0f4748862a8d1b31c6bbad62ac6514ce0624681548ec8c0ffe66"
+    },
+    "auth-implementation-patterns": {
+      "source": "wshobson/agents",
+      "sourceType": "github",
+      "computedHash": "371c84e03e4b456134fba5427096083b163716517f6210fadcffe887c5f1daae"
+    },
+    "building-native-ui": {
+      "source": "expo/skills",
+      "sourceType": "github",
+      "computedHash": "a0316d2ce842d2dd8067a144e339cf502329dc7701f9f5122268fdb3d4c980f7"
+    },
+    "find-skills": {
+      "source": "vercel-labs/skills",
+      "sourceType": "github",
+      "computedHash": "25872a21881a950edc3db1f3329664d60405d539660ce05b3265db2de06a7dfd"
+    },
+    "native-data-fetching": {
+      "source": "expo/skills",
+      "sourceType": "github",
+      "computedHash": "523901a0f2dfddc91f6c3b09320e240abfe7c81b6f7277e14774ec39ac0c544b"
+    },
+    "react-native-testing": {
+      "source": "callstack/react-native-testing-library",
+      "sourceType": "github",
+      "computedHash": "e6beef7078f84b041306394c89141344e7a88f83b06b53e26a0ea8615ca2a703"
+    },
+    "upgrade-react-native": {
+      "source": "react-native-community/skills",
+      "sourceType": "github",
+      "computedHash": "d291a85b4efc61c3a2ee8fe9d9ffa1d34002d4de146ecf7bf94dd72c93a9693d"
+    },
+    "websocket-engineer": {
+      "source": "jeffallan/claude-skills",
+      "sourceType": "github",
+      "computedHash": "a90c56583db692bd98e0d1e1210a54b0427923970965676c6fe86101261c9ece"
+    }
+  }
+}
