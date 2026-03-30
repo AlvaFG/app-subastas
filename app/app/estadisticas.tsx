@@ -90,7 +90,7 @@ export default function EstadisticasScreen() {
         </View>
         <View style={[styles.catRow, { borderBottomWidth: 0 }]}>
           <Text style={styles.catLabel}>Impagas</Text>
-          <Text style={[styles.catValue, data.multas.impagas > 0 && { color: colors.error }]}>
+          <Text style={[styles.catValue, data.multas.impagas > 0 && { color: colors.alertEmber }]}>
             {data.multas.impagas}
           </Text>
         </View>

@@ -146,7 +146,10 @@ export default function LiveAuctionScreen() {
 
     setSending(true);
     const socket = getSocket();
-    if (!socket) return;
+    if (!socket) {
+      setSending(false);
+      return;
+    }
 
     socket.emit('place-bid', { subastaId, itemId: currentItem?.identificador, importe }, (response: any) => {
       setSending(false);

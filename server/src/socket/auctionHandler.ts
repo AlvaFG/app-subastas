@@ -169,12 +169,13 @@ export function setupAuctionSocket(io: Server) {
         // Get item info + auction category
         const itemInfo = await pool.request()
           .input('item', itemId)
+          .input('subastaId', subastaId)
           .query(`
             SELECT ic.precioBase, ic.subastado, s.categoria, s.moneda
             FROM itemsCatalogo ic
             INNER JOIN catalogos c ON c.identificador = ic.catalogo
             INNER JOIN subastas s ON s.identificador = c.subasta
-            WHERE ic.identificador = @item AND s.identificador = ${subastaId}
+            WHERE ic.identificador = @item AND s.identificador = @subastaId
           `);
 
         if (itemInfo.recordset.length === 0) {

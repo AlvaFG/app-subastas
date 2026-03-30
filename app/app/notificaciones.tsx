@@ -94,7 +94,7 @@ export default function NotificacionesScreen() {
               <Ionicons
                 name={iconForType(item.tipo) as any}
                 size={20}
-                color={item.tipo === 'ganador' ? colors.auctionGold : item.tipo === 'multa' ? colors.error : colors.textSecondary}
+                color={item.tipo === 'ganador' ? colors.auctionGold : item.tipo === 'multa' ? colors.alertEmber : colors.textSecondary}
               />
               <Text style={styles.cardTitle} numberOfLines={1}>{item.titulo}</Text>
               {item.leida === 'no' && <View style={styles.dot} />}

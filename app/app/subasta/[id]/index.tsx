@@ -3,10 +3,10 @@ import {
   View, Text, StyleSheet, FlatList, RefreshControl,
 } from 'react-native';
 import { useLocalSearchParams, Stack } from 'expo-router';
-import { Card, CardSkeleton, Badge } from '../../src/components';
-import { CategoryName } from '../../src/components/Badge';
-import { colors, fonts, fontSizes, spacing } from '../../src/theme';
-import api from '../../src/services/api';
+import { Card, CardSkeleton, Badge } from '../../../src/components';
+import { CategoryName } from '../../../src/components/Badge';
+import { colors, fonts, fontSizes, spacing } from '../../../src/theme';
+import api from '../../../src/services/api';
 
 interface CatalogoItem {
   identificador: number;
