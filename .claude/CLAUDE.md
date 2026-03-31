@@ -68,8 +68,37 @@ TPO academico DA1: App movil de subastas con React Native (Expo) + Node.js/Expre
 - **Context:** Full project
 - **Rules:** Prioritize simplicity. Reject over-engineering. Validate against TPO requirements.
 
-## SQL Server Notes
+## SQL Server Setup (2026-03-31)
+
+### Location & Access
+- **Running in:** Docker container (`sqlserver-subastas`)
+- **Host:** `localhost:1433`
+- **User:** `sa`
+- **Password:** `TuContraseña123`
+- **Database:** `subastas` (created via `server/create-db.js`)
+
+### Start SQL Server
+```bash
+# SQL Server is running in Docker
+docker start sqlserver-subastas
+
+# Or if stopped:
+docker run -e "ACCEPT_EULA=Y" -e "SA_PASSWORD=TuContraseña123" \
+  -p 1433:1433 --name sqlserver-subastas -d mcr.microsoft.com/mssql/server:latest
+```
+
+### Run Migrations
+```bash
+cd server
+node run-migrations-v2.js
+```
+
+### Migration Scripts
+- `001_fix_typos.sql` — Corrige constraints con typos (incativo→inactivo, carrada→cerrada)
+- `002_nuevas_columnas.sql` — Agrega columnas: subastas.moneda, clientes.email, clientes.claveHash
+- `003_nuevas_tablas.sql` — Crea 7 tablas: mediosDePago, sesiones, notificaciones, multas, solicitudesVenta, depositos, cuentasAVista
+
+### Schema Notes
 - Existing schema has 16 tables — do NOT modify existing columns without documenting in milestone.md
-- Known typos to fix: `'incativo'` -> `'inactivo'` (L16), `'carrada'` -> `'cerrada'` (L88), period instead of comma (L40)
-- New tables needed: mediosDePago, sesiones, notificaciones, multas, solicitudesVenta, depositos, cuentasAVista
-- New columns: subastas.moneda, clientes.email, clientes.claveHash
+- All new tables use camelCase naming to match existing schema
+- Migrations are idempotent (safe to re-run)
