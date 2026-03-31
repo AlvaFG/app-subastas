@@ -11,6 +11,7 @@ import { CategoryName } from '../../../src/components/Badge';
 import { colors, fonts, fontSizes, spacing, radius, shadows, duration } from '../../../src/theme';
 import { connectSocket, getSocket, disconnectSocket } from '../../../src/services/socket';
 import { useAuthStore } from '../../../src/store/authStore';
+import api from '../../../src/services/api';
 
 interface Bid {
   bidId: number;
@@ -96,8 +97,18 @@ export default function LiveAuctionScreen() {
 
         // Listen for item changes
         socket.on('active-item-changed', async (data: { itemId: number }) => {
-          // Refresh item data - simplified
-          setBids([]);
+          if (!mounted) return;
+          try {
+            const res = await api.get(`/subastas/items/${data.itemId}`);
+            const newItem = res.data.data;
+            setCurrentItem(newItem);
+            setBids([]);
+            setBestBid(newItem.precioBase);
+            setBestBidder('');
+          } catch (err) {
+            console.error('Error fetching new item:', err);
+            setBids([]);
+          }
         });
 
         // Item sold

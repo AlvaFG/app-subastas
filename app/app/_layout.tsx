@@ -21,7 +21,7 @@ export default function RootLayout() {
   // T209: Cargar usuario al iniciar
   useEffect(() => {
     loadUser();
-  }, []);
+  }, [loadUser]);
 
   // T209: Auth navigation guard
   useEffect(() => {

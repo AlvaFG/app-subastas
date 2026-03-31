@@ -2,6 +2,7 @@ import { Server, Socket } from 'socket.io';
 import jwt from 'jsonwebtoken';
 import { connectDB } from '../models/db';
 import { AuthPayload } from '../middleware/auth';
+import { createWinnerNotification } from '../controllers/notificacionesController';
 
 // Track: userId -> subastaId (T402: max 1 subasta por usuario)
 const userConnections = new Map<number, number>();
@@ -398,6 +399,12 @@ export function setupAuctionSocket(io: Server) {
 
         const w = winner.recordset[0];
 
+        // Get auction moneda
+        const subastaData = await pool.request()
+          .input('subastaId', subastaId)
+          .query("SELECT moneda FROM subastas WHERE identificador = @subastaId");
+        const subastaMoneda = subastaData.recordset[0]?.moneda || 'ARS';
+
         // Mark winning bid
         await pool.request()
           .input('pujoId', w.pujoId)
@@ -452,6 +459,14 @@ export function setupAuctionSocket(io: Server) {
               mensaje: 'Seleccione su medio de pago',
             });
           }
+        }
+
+        // T604: Create winner notification
+        try {
+          await createWinnerNotification(w.cliente, parseFloat(w.importe), parseFloat(w.comision), 0, subastaMoneda);
+        } catch (err) {
+          console.error('Error creating winner notification:', err);
+          // Don't block auction if notification fails
         }
 
         callback({ success: true, data: { ganador: w.ganadorNombre, importe: w.importe } });

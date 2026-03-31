@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import {
   View, Text, StyleSheet, FlatList, RefreshControl,
 } from 'react-native';
-import { useLocalSearchParams, Stack } from 'expo-router';
+import { useLocalSearchParams, Stack, useRouter } from 'expo-router';
 import { Card, CardSkeleton, Badge } from '../../../src/components';
 import { CategoryName } from '../../../src/components/Badge';
 import { colors, fonts, fontSizes, spacing } from '../../../src/theme';
@@ -22,6 +22,7 @@ interface CatalogoItem {
 
 export default function CatalogoScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  const router = useRouter();
   const [items, setItems] = useState<CatalogoItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -47,7 +48,7 @@ export default function CatalogoScreen() {
       title={item.descripcionCatalogo || 'Sin descripcion'}
       price={item.precioBase}
       description={item.descripcionCompleta}
-      onPress={() => {/* TODO: navigate to item detail */}}
+      onPress={() => router.push(`/item/${item.identificador}`)}
     />
   );
 
