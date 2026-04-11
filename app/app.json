@@ -2,6 +2,7 @@
   "expo": {
     "name": "Subastas",
     "slug": "subastas-app",
+    "scheme": "subastas-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -21,7 +22,8 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.alvafg.subastasapp"
     },
     "web": {
       "favicon": "./assets/favicon.png"

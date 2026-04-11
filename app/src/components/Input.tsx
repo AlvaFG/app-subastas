@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useRef } from 'react';
 import {
   View,
   TextInput,
@@ -7,9 +7,11 @@ import {
   TouchableOpacity,
   TextInputProps,
   ViewStyle,
+  NativeSyntheticEvent,
+  TextInputFocusEventData,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { colors, fonts, fontSizes, radius, spacing, shadows } from '../theme';
+import { colors, fonts, fontSizes, radius, spacing } from '../theme';
 
 interface InputProps extends Omit<TextInputProps, 'style'> {
   label?: string;
@@ -27,25 +29,14 @@ export function Input({
   style,
   ...props
 }: InputProps) {
-  const [focused, setFocused] = useState(false);
-  const [secureVisible, setSecureVisible] = useState(!isPassword);
+  const [secureVisible, setSecureVisible] = React.useState(!isPassword);
 
-  const borderColor = error
-    ? colors.alertEmber
-    : focused
-    ? colors.auctionGold
-    : colors.border;
+  const borderColor = error ? colors.alertEmber : colors.border;
 
   return (
     <View style={[styles.container, style]}>
       {label && <Text style={styles.label}>{label}</Text>}
-      <View
-        style={[
-          styles.inputWrapper,
-          { borderColor },
-          focused && !error && shadows.sm,
-        ]}
-      >
+      <View style={[styles.inputWrapper, { borderColor }]}>
         {leftIcon && (
           <Ionicons
             name={leftIcon}
@@ -56,15 +47,7 @@ export function Input({
         )}
         <TextInput
           {...props}
-          secureTextEntry={!secureVisible}
-          onFocus={(e) => {
-            setFocused(true);
-            props.onFocus?.(e);
-          }}
-          onBlur={(e) => {
-            setFocused(false);
-            props.onBlur?.(e);
-          }}
+          secureTextEntry={isPassword && !secureVisible}
           placeholderTextColor={colors.textMuted}
           style={[
             styles.input,

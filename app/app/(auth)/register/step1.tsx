@@ -35,10 +35,6 @@ export default function RegisterStep1Screen() {
       setError('Complete todos los campos obligatorios');
       return;
     }
-    if (!fotoFrente || !fotoDorso) {
-      setError('Suba foto del documento (frente y dorso)');
-      return;
-    }
     setLoading(true);
     try {
       const id = await registerStep1({
