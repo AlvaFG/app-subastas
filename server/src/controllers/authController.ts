@@ -67,6 +67,8 @@ export async function registerStep1(req: Request, res: Response): Promise<void> 
 export async function registerStep2(req: Request, res: Response): Promise<void> {
   try {
     const { identificador, email, clave } = req.body;
+    const categoriasDisponibles = ['comun', 'especial', 'plata', 'oro', 'platino'];
+    const categoriaAsignada = categoriasDisponibles[Math.floor(Math.random() * categoriasDisponibles.length)];
 
     const pool = await connectDB();
 
@@ -101,15 +103,19 @@ export async function registerStep2(req: Request, res: Response): Promise<void> 
       .input('identificador', identificador)
       .input('email', email)
       .input('claveHash', claveHash)
+      .input('categoria', categoriaAsignada)
       .query(`
         UPDATE clientes
-        SET email = @email, claveHash = @claveHash
+        SET email = @email, claveHash = @claveHash, categoria = @categoria
         WHERE identificador = @identificador
       `);
 
     res.json({
       success: true,
-      data: { mensaje: 'Registro completado. Ya puede iniciar sesion.' },
+      data: {
+        mensaje: 'Registro completado. Ya puede iniciar sesion.',
+        categoria: categoriaAsignada,
+      },
     });
   } catch (error) {
     console.error('Error en registerStep2:', error);
