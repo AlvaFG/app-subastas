@@ -1,12 +1,13 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, Alert } from 'react-native';
-import { router } from 'expo-router';
+import { router, useLocalSearchParams } from 'expo-router';
 import { Button, Input } from '../../../src/components';
 import { colors, fonts, fontSizes, spacing } from '../../../src/theme';
 import { useAuthStore } from '../../../src/store/authStore';
 
 export default function RegisterStep2Screen() {
-  const [identificador, setIdentificador] = useState('');
+  const { identificador: identificadorParam } = useLocalSearchParams<{ identificador?: string }>();
+  const [identificador, setIdentificador] = useState(identificadorParam || '');
   const [email, setEmail] = useState('');
   const [clave, setClave] = useState('');
   const [confirmarClave, setConfirmarClave] = useState('');
@@ -59,6 +60,7 @@ export default function RegisterStep2Screen() {
         value={identificador}
         onChangeText={setIdentificador}
         keyboardType="numeric"
+        editable={!identificadorParam}
       />
       <Input
         label="Email"

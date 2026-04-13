@@ -35,11 +35,11 @@ export async function registerStep1(req: Request, res: Response): Promise<void> 
 
     const personaId = personaResult.recordset[0].identificador;
 
-    // Insertar cliente con estado pendiente (admitido = 'no' hasta verificacion)
+    // Auto-aprobar al usuario al completar etapa 1 si supera las validaciones de entrada.
     await pool.request()
       .input('identificador', personaId)
       .input('numeroPais', numeroPais)
-      .input('admitido', 'no')
+      .input('admitido', 'si')
       .input('categoria', 'comun')
       .input('verificador', 1) // TODO: asignar verificador real
       .query(`
@@ -53,7 +53,8 @@ export async function registerStep1(req: Request, res: Response): Promise<void> 
       success: true,
       data: {
         identificador: personaId,
-        mensaje: 'Registro etapa 1 completado. Pendiente de verificacion.',
+        autoAprobado: true,
+        mensaje: 'Registro etapa 1 completado. Puede continuar con la etapa 2.',
       },
     });
   } catch (error) {

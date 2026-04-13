@@ -60,7 +60,7 @@ export default function PerfilScreen() {
       <Button
         title="Medios de Pago"
         variant="secondary"
-        onPress={() => {/* TODO: navegar a medios de pago */}}
+        onPress={() => router.push('/medios-pago')}
         style={{ marginTop: spacing.sm }}
       />
 

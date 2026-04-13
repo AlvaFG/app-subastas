@@ -25,6 +25,16 @@ interface CurrentItem {
   identificador: number;
   precioBase: number;
   descripcionCatalogo: string;
+  subastaCat?: string;
+}
+
+interface MedioPagoOption {
+  identificador: number;
+  tipo: string;
+  descripcion: string;
+  moneda: string;
+  internacional: string;
+  montoDisponible: number;
 }
 
 export default function LiveAuctionScreen() {
@@ -44,6 +54,9 @@ export default function LiveAuctionScreen() {
   const [moneda, setMoneda] = useState('ARS');
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [wonItem, setWonItem] = useState<any>(null);
+  const [selectedMedioPagoId, setSelectedMedioPagoId] = useState<number | null>(null);
+  const [closingInMs, setClosingInMs] = useState<number | null>(null);
+  const [currentCategory, setCurrentCategory] = useState<string>('comun');
 
   // Animation for price pulse
   const priceScale = useSharedValue(1);
@@ -74,6 +87,7 @@ export default function LiveAuctionScreen() {
             setMoneda(response.data.moneda || 'ARS');
             if (response.data.currentBid) {
               setCurrentItem(response.data.currentBid.item);
+              setCurrentCategory(response.data.currentBid.item.subastaCat || 'comun');
               if (response.data.currentBid.bestBid) {
                 setBestBid(response.data.currentBid.bestBid.importe);
                 setBestBidder(response.data.currentBid.bestBid.postorNombre);
@@ -102,13 +116,20 @@ export default function LiveAuctionScreen() {
             const res = await api.get(`/subastas/items/${data.itemId}`);
             const newItem = res.data.data;
             setCurrentItem(newItem);
+            setCurrentCategory(newItem.subastaCat || 'comun');
             setBids([]);
             setBestBid(newItem.precioBase);
             setBestBidder('');
+            setClosingInMs(null);
           } catch (err) {
             console.error('Error fetching new item:', err);
             setBids([]);
           }
+        });
+
+        socket.on('item-close-scheduled', (data: { itemId: number; closeInMs: number }) => {
+          if (!mounted) return;
+          setClosingInMs(data.closeInMs);
         });
 
         // Item sold
@@ -127,11 +148,21 @@ export default function LiveAuctionScreen() {
         socket.on('you-won', (data: any) => {
           if (!mounted) return;
           setWonItem(data);
+          setSelectedMedioPagoId(data?.medios?.[0]?.identificador || null);
           setShowPaymentModal(true);
         });
 
-      } catch (error) {
-        Alert.alert('Error', 'No se pudo conectar a la subasta');
+        socket.on('auction-closed', () => {
+          if (!mounted) return;
+          setCanBid(false);
+          setBidReason('La subasta ya fue cerrada');
+          setClosingInMs(null);
+          Alert.alert('Subasta cerrada', 'La subasta fue cerrada luego del pago final.');
+        });
+
+      } catch (error: any) {
+        const msg = error?.message || 'No se pudo conectar a la subasta';
+        Alert.alert('Error', msg);
       }
     })();
 
@@ -145,6 +176,18 @@ export default function LiveAuctionScreen() {
     };
   }, [subastaId]);
 
+  useEffect(() => {
+    if (closingInMs == null) return;
+    const timer = setInterval(() => {
+      setClosingInMs((prev) => {
+        if (prev == null) return null;
+        if (prev <= 1000) return null;
+        return prev - 1000;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [closingInMs]);
+
   const formatPrice = (price: number) =>
     `${moneda === 'USD' ? 'US$' : '$'} ${price.toLocaleString('es-AR', { minimumFractionDigits: 2 })}`;
 
@@ -153,6 +196,30 @@ export default function LiveAuctionScreen() {
     if (isNaN(importe) || importe <= 0) {
       Alert.alert('Error', 'Ingrese un monto valido');
       return;
+    }
+
+    if (!currentItem) {
+      Alert.alert('Error', 'No hay item activo');
+      return;
+    }
+
+    const base = Number(currentItem.precioBase || 0);
+    const isHighCategory = currentCategory === 'oro' || currentCategory === 'platino';
+    if (importe <= bestBid) {
+      Alert.alert('Puja rechazada', `La puja debe ser mayor a ${bestBid}`);
+      return;
+    }
+    if (!isHighCategory) {
+      const minBid = bestBid + (base * 0.01);
+      const maxBid = bestBid + (base * 0.20);
+      if (importe < minBid) {
+        Alert.alert('Puja rechazada', `Puja minima: ${minBid.toFixed(2)}`);
+        return;
+      }
+      if (importe > maxBid) {
+        Alert.alert('Puja rechazada', `Puja maxima: ${maxBid.toFixed(2)}`);
+        return;
+      }
     }
 
     setSending(true);
@@ -168,6 +235,28 @@ export default function LiveAuctionScreen() {
         setBidInput('');
       } else {
         Alert.alert('Puja rechazada', response.error);
+      }
+    });
+  };
+
+  const confirmPayment = () => {
+    if (!wonItem?.itemId || !selectedMedioPagoId) {
+      Alert.alert('Error', 'Seleccione un medio de pago');
+      return;
+    }
+    const socket = getSocket();
+    if (!socket) return;
+    socket.emit('confirm-payment', { itemId: wonItem.itemId, medioPagoId: selectedMedioPagoId }, (response: any) => {
+      if (response.success) {
+        Alert.alert('Pago confirmado', `Total pagado: ${formatPrice(wonItem.total || (wonItem.importe + wonItem.comision + wonItem.costoEnvio))}`);
+        setShowPaymentModal(false);
+        setWonItem(null);
+      } else {
+        if (typeof response.error === 'string' && response.error.toLowerCase().includes('multa aplicada')) {
+          setShowPaymentModal(false);
+          setWonItem(null);
+        }
+        Alert.alert('Pago rechazado', response.error);
       }
     });
   };
@@ -205,6 +294,7 @@ export default function LiveAuctionScreen() {
             <Text style={styles.priceLabel}>Mejor Oferta</Text>
             <Text style={styles.currentPrice}>{formatPrice(bestBid)}</Text>
             {bestBidder && <Text style={styles.bidderName}>{bestBidder}</Text>}
+            {closingInMs != null && <Text style={styles.countdown}>Cierre en: {Math.ceil(closingInMs / 1000)}s</Text>}
           </Animated.View>
         </View>
       ) : (
@@ -270,12 +360,29 @@ export default function LiveAuctionScreen() {
               <Text style={styles.wonLabel}>Comision</Text>
               <Text style={styles.wonValue}>{formatPrice(wonItem.comision)}</Text>
             </View>
+            <View style={styles.wonDetail}>
+              <Text style={styles.wonLabel}>Costo de envio</Text>
+              <Text style={styles.wonValue}>{formatPrice(wonItem.costoEnvio || 0)}</Text>
+            </View>
+            <View style={styles.wonDetail}>
+              <Text style={styles.wonLabel}>Total</Text>
+              <Text style={styles.wonValue}>{formatPrice(wonItem.total || (wonItem.importe + wonItem.comision + (wonItem.costoEnvio || 0)))}</Text>
+            </View>
+
+            <Text style={[styles.wonLabel, { marginTop: spacing.md }]}>Seleccione medio de pago</Text>
+            {Array.isArray(wonItem.medios) && wonItem.medios.map((m: MedioPagoOption) => (
+              <Button
+                key={m.identificador}
+                title={`${m.descripcion} (${m.moneda}) - ${formatPrice(Number(m.montoDisponible || 0))}`}
+                variant={selectedMedioPagoId === m.identificador ? 'primary' : 'outline'}
+                onPress={() => setSelectedMedioPagoId(m.identificador)}
+                size="sm"
+                style={{ marginTop: spacing.xs }}
+              />
+            ))}
             <Button
-              title="Seleccionar Medio de Pago"
-              onPress={() => {
-                setShowPaymentModal(false);
-                // TODO: navigate to payment selection
-              }}
+              title="Confirmar Pago"
+              onPress={confirmPayment}
               size="lg"
               style={{ marginTop: spacing.md }}
             />
@@ -303,6 +410,7 @@ const styles = StyleSheet.create({
   priceLabel: { fontFamily: fonts.bodyMedium, fontSize: fontSizes.sm, color: colors.textMuted },
   currentPrice: { fontFamily: fonts.display, fontSize: fontSizes.hero, color: colors.auctionGold, marginTop: spacing.xs },
   bidderName: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.steelBlue, marginTop: spacing.xs },
+  countdown: { fontFamily: fonts.bodySemibold, fontSize: fontSizes.sm, color: colors.alertEmber, marginTop: spacing.xs },
 
   waiting: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   waitingText: { fontFamily: fonts.body, fontSize: fontSizes.lg, color: colors.textMuted },

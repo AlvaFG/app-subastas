@@ -3,7 +3,7 @@ import {
   View, Text, StyleSheet, FlatList, RefreshControl,
 } from 'react-native';
 import { useLocalSearchParams, Stack, useRouter } from 'expo-router';
-import { Card, CardSkeleton, Badge } from '../../../src/components';
+import { Button, Card, CardSkeleton, Badge } from '../../../src/components';
 import { CategoryName } from '../../../src/components/Badge';
 import { colors, fonts, fontSizes, spacing } from '../../../src/theme';
 import api from '../../../src/services/api';
@@ -77,9 +77,16 @@ export default function CatalogoScreen() {
             <Text style={styles.empty}>Catalogo vacio</Text>
           }
           ListHeaderComponent={
-            items.length > 0 ? (
-              <Text style={styles.count}>{items.length} piezas</Text>
-            ) : null
+            <View>
+              <Button
+                title="Entrar a Subasta en Vivo"
+                onPress={() => router.push(`/subasta/${id}/live`)}
+                style={styles.liveBtn}
+              />
+              {items.length > 0 ? (
+                <Text style={styles.count}>{items.length} piezas</Text>
+              ) : null}
+            </View>
           }
         />
       )}
@@ -91,6 +98,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.ivory },
   skeletons: { padding: spacing.lg, gap: spacing.md },
   list: { padding: spacing.md, paddingBottom: spacing['3xl'] },
+  liveBtn: { marginBottom: spacing.md },
   row: { gap: spacing.md, marginBottom: spacing.md },
   count: { fontFamily: fonts.bodyMedium, fontSize: fontSizes.sm, color: colors.textSecondary, marginBottom: spacing.md },
   empty: { fontFamily: fonts.body, fontSize: fontSizes.base, color: colors.textMuted, textAlign: 'center', marginTop: spacing['2xl'] },

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { router } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { Button, Input } from '../../../src/components';
@@ -43,11 +43,7 @@ export default function RegisterStep1Screen() {
         direccion,
         numeroPais: parseInt(numeroPais),
       });
-      Alert.alert(
-        'Registro enviado',
-        'Sus datos seran verificados. Recibira un email cuando pueda completar el registro.',
-        [{ text: 'OK', onPress: () => router.back() }],
-      );
+      router.replace(`/(auth)/register/step2?identificador=${id}`);
     } catch (err: any) {
       setError(err.response?.data?.error || 'Error al registrar');
     } finally {

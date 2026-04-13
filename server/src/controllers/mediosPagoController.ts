@@ -28,10 +28,14 @@ export async function createMedioPago(req: AuthRequest, res: Response): Promise<
   try {
     const {
       tipo, descripcion, banco, numeroCuenta, cbu, moneda,
-      ultimosDigitos, internacional, montoCheque,
+      ultimosDigitos, internacional, montoCheque, montoDisponible,
     } = req.body;
 
     const pool = await connectDB();
+
+    const montoInicial = Number(montoDisponible ?? montoCheque ?? 0);
+    const montoInicialSeguro = Number.isFinite(montoInicial) && montoInicial > 0 ? montoInicial : 0;
+    const montoChequeFinal = tipo === 'cheque_certificado' ? (montoInicialSeguro || null) : null;
 
     const result = await pool.request()
       .input('cliente', req.user!.id)
@@ -43,14 +47,15 @@ export async function createMedioPago(req: AuthRequest, res: Response): Promise<
       .input('moneda', moneda || 'ARS')
       .input('ultimosDigitos', ultimosDigitos || null)
       .input('internacional', internacional || 'no')
-      .input('montoCheque', montoCheque || null)
-      .input('montoDisponible', montoCheque || null)
+      .input('montoCheque', montoChequeFinal)
+      .input('montoDisponible', montoInicialSeguro)
+      .input('verificado', 'si')
       .query(`
         INSERT INTO mediosDePago (cliente, tipo, descripcion, banco, numeroCuenta, cbu, moneda,
-                                   ultimosDigitos, internacional, montoCheque, montoDisponible)
+                                   ultimosDigitos, internacional, montoCheque, montoDisponible, verificado)
         OUTPUT INSERTED.identificador
         VALUES (@cliente, @tipo, @descripcion, @banco, @numeroCuenta, @cbu, @moneda,
-                @ultimosDigitos, @internacional, @montoCheque, @montoDisponible)
+                @ultimosDigitos, @internacional, @montoCheque, @montoDisponible, @verificado)
       `);
 
     res.status(201).json({
@@ -102,6 +107,64 @@ export async function updateMedioPago(req: AuthRequest, res: Response): Promise<
     res.json({ success: true, data: { mensaje: 'Medio de pago actualizado' } });
   } catch (error) {
     console.error('Error updateMedioPago:', error);
+    res.status(500).json({ success: false, error: 'Error interno del servidor' });
+  }
+}
+
+// PUT /medios-pago/:id/saldo - Update balance for a payment method
+export async function updateSaldoMedioPago(req: AuthRequest, res: Response): Promise<void> {
+  try {
+    const { id } = req.params;
+    const { monto } = req.body;
+
+    if (typeof monto !== 'number' || monto === 0) {
+      res.status(400).json({ success: false, error: 'Monto invalido' });
+      return;
+    }
+
+    const pool = await connectDB();
+
+    // Get current balance and verify ownership
+    const medio = await pool.request()
+      .input('id', id)
+      .input('cliente', req.user!.id)
+      .query(`
+        SELECT identificador, montoDisponible, moneda
+        FROM mediosDePago
+        WHERE identificador = @id AND cliente = @cliente
+      `);
+
+    if (medio.recordset.length === 0) {
+      res.status(404).json({ success: false, error: 'Medio de pago no encontrado' });
+      return;
+    }
+
+    const nuevoMonto = Number(medio.recordset[0].montoDisponible || 0) + monto;
+
+    if (nuevoMonto < 0) {
+      res.status(400).json({ success: false, error: 'Saldo insuficiente' });
+      return;
+    }
+
+    await pool.request()
+      .input('id', id)
+      .input('nuevoMonto', nuevoMonto)
+      .query(`
+        UPDATE mediosDePago
+        SET montoDisponible = @nuevoMonto
+        WHERE identificador = @id
+      `);
+
+    res.json({
+      success: true,
+      data: {
+        montoAnterior: Number(medio.recordset[0].montoDisponible || 0),
+        montoNuevo: nuevoMonto,
+        moneda: medio.recordset[0].moneda,
+      },
+    });
+  } catch (error) {
+    console.error('Error updateSaldoMedioPago:', error);
     res.status(500).json({ success: false, error: 'Error interno del servidor' });
   }
 }

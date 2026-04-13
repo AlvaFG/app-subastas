@@ -14,7 +14,8 @@ export function canParticipateInAuction(userCategory: string, auctionCategory: s
 
   if (userLevel < 0 || auctionLevel < 0) return false;
 
-  return auctionLevel <= userLevel && userLevel - auctionLevel <= 1;
+  // User can bid in same category or any lower category.
+  return auctionLevel <= userLevel;
 }
 
 export function normalizePriceBaseToArs(precioBase: number, moneda?: string | null): number {

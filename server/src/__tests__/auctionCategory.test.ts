@@ -15,12 +15,12 @@ describe('auction category helpers', () => {
     expect(resolveAuctionCategoryByPriceBase(40, 'USD')).toBe('oro');
   });
 
-  it('should allow same category and one level down only', () => {
+  it('should allow same category and any lower category', () => {
     expect(canParticipateInAuction('plata', 'plata')).toBe(true);
     expect(canParticipateInAuction('plata', 'especial')).toBe(true);
-    expect(canParticipateInAuction('plata', 'comun')).toBe(false);
+    expect(canParticipateInAuction('plata', 'comun')).toBe(true);
     expect(canParticipateInAuction('oro', 'plata')).toBe(true);
-    expect(canParticipateInAuction('oro', 'especial')).toBe(false);
+    expect(canParticipateInAuction('oro', 'especial')).toBe(true);
     expect(canParticipateInAuction('comun', 'especial')).toBe(false);
   });
 });

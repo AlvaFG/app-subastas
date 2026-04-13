@@ -42,7 +42,7 @@ function resolveApiUrl(): string {
   return 'http://localhost:3000/api';
 }
 
-const API_URL = resolveApiUrl();
+export const API_URL = resolveApiUrl();
 console.info(`[api] baseURL=${API_URL}`);
 
 const api = axios.create({ baseURL: API_URL });
