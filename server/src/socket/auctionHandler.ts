@@ -3,6 +3,7 @@ import jwt from 'jsonwebtoken';
 import { connectDB } from '../models/db';
 import { AuthPayload } from '../middleware/auth';
 import { createWinnerNotification } from '../controllers/notificacionesController';
+import { canParticipateInAuction } from '../utils/category';
 
 // Track: userId -> subastaId (T402: max 1 subasta por usuario)
 const userConnections = new Map<number, number>();
@@ -51,14 +52,7 @@ export function setupAuctionSocket(io: Server) {
           return;
         }
 
-        // T307: Category access check
-        const order = ['comun', 'especial', 'plata', 'oro', 'platino'];
-        const subastaLevel = order.indexOf(subasta.recordset[0].categoria);
-        const userLevel = order.indexOf(user.categoria);
-        if (userLevel < subastaLevel) {
-          callback({ success: false, error: 'Tu categoria no permite acceder a esta subasta' });
-          return;
-        }
+        const canBidByCategory = canParticipateInAuction(user.categoria, subasta.recordset[0].categoria);
 
         // Check if user has verified payment method
         const medios = await pool.request()
@@ -121,8 +115,10 @@ export function setupAuctionSocket(io: Server) {
         callback({
           success: true,
           data: {
-            canBid: canBid && !hasUnpaidPenalty,
-            reason: hasUnpaidPenalty ? 'Tiene multas impagas' : (!canBid ? 'Sin medio de pago verificado' : null),
+            canBid: canBidByCategory && canBid && !hasUnpaidPenalty,
+            reason: !canBidByCategory
+              ? 'Tu categoria no permite ofertar en esta subasta'
+              : (hasUnpaidPenalty ? 'Tiene multas impagas' : (!canBid ? 'Sin medio de pago verificado' : null)),
             currentBid: currentBidData,
             moneda: subasta.recordset[0].moneda,
           },
@@ -188,6 +184,11 @@ export function setupAuctionSocket(io: Server) {
 
         if (subastado === 'si') {
           callback({ success: false, error: 'Este item ya fue vendido' });
+          return;
+        }
+
+        if (!canParticipateInAuction(user.categoria, categoria)) {
+          callback({ success: false, error: 'Tu categoria no permite ofertar en esta subasta' });
           return;
         }
 

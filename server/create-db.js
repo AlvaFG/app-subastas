@@ -2,17 +2,12 @@ const sql = require('mssql');
 
 const config = {
   server: 'localhost',
-  authentication: {
-    type: 'default',
-    options: {
-      userName: 'sa',
-      password: 'TuContraseña123'
-    }
-  },
+  user: 'sa',
+  password: 'TuContraseña123',
+  database: 'master',
   options: {
     encrypt: true,
     trustServerCertificate: true,
-    database: 'master',  // Connect to master first
     port: 1433
   }
 };

@@ -15,7 +15,17 @@ export async function getSubastas(req: Request, res: Response): Promise<void> {
       SELECT s.identificador, s.fecha, s.hora, s.estado, s.ubicacion,
              s.categoria, s.moneda, s.capacidadAsistentes,
              p.nombre as subastadorNombre,
-             (SELECT COUNT(*) FROM catalogos c WHERE c.subasta = s.identificador) as totalItems
+             (SELECT COUNT(*) FROM catalogos c WHERE c.subasta = s.identificador) as totalItems,
+             (SELECT TOP 1 pr.descripcionCatalogo FROM itemsCatalogo ic
+              INNER JOIN productos pr ON pr.identificador = ic.producto
+              INNER JOIN catalogos c ON c.identificador = ic.catalogo
+              WHERE c.subasta = s.identificador
+              ORDER BY ic.identificador) as nombrePrimerItem,
+             (SELECT TOP 1 f.foto FROM fotos f
+              INNER JOIN itemsCatalogo ic ON ic.producto = f.producto
+              INNER JOIN catalogos c ON c.identificador = ic.catalogo
+              WHERE c.subasta = s.identificador
+              ORDER BY ic.identificador, f.identificador) as fotoPrimerItem
       FROM subastas s
       LEFT JOIN subastadores sub ON sub.identificador = s.subastador
       LEFT JOIN personas p ON p.identificador = sub.identificador
@@ -32,7 +42,7 @@ export async function getSubastas(req: Request, res: Response): Promise<void> {
       request.input('categoria', categoria);
     }
 
-    query += ' ORDER BY s.fecha DESC, s.hora DESC';
+    query += ' ORDER BY s.fecha DESC, s.hora DESC, s.identificador DESC';
     query += ' OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY';
     request.input('offset', offset);
     request.input('limit', limit);
@@ -46,10 +56,18 @@ export async function getSubastas(req: Request, res: Response): Promise<void> {
     if (categoria) { countQuery += ' AND categoria = @categoria'; countReq.input('categoria', categoria); }
     const countResult = await countReq.query(countQuery);
 
+    // Convert foto to base64 if present
+    const subastas = result.recordset.map((s: any) => ({
+      ...s,
+      fotoPrimerItem: s.fotoPrimerItem 
+        ? `data:image/jpeg;base64,${Buffer.from(s.fotoPrimerItem).toString('base64')}`
+        : null,
+    }));
+
     res.json({
       success: true,
       data: {
-        subastas: result.recordset,
+        subastas,
         total: countResult.recordset[0].total,
         page,
         limit,
@@ -69,27 +87,6 @@ export async function getCatalogo(req: AuthRequest, res: Response): Promise<void
 
     const pool = await connectDB();
 
-    // T307: Verificar acceso por categoria si autenticado
-    if (isAuthenticated) {
-      const subasta = await pool.request()
-        .input('id', id)
-        .query('SELECT categoria FROM subastas WHERE identificador = @id');
-
-      if (subasta.recordset.length === 0) {
-        res.status(404).json({ success: false, error: 'Subasta no encontrada' });
-        return;
-      }
-
-      const order = ['comun', 'especial', 'plata', 'oro', 'platino'];
-      const subastaLevel = order.indexOf(subasta.recordset[0].categoria);
-      const userLevel = order.indexOf(req.user!.categoria);
-
-      if (userLevel < subastaLevel) {
-        res.status(403).json({ success: false, error: 'Tu categoria no permite acceder a esta subasta' });
-        return;
-      }
-    }
-
     // Obtener items del catalogo
     const priceField = isAuthenticated
       ? 'ic.precioBase, ic.comision,'
@@ -100,6 +97,7 @@ export async function getCatalogo(req: AuthRequest, res: Response): Promise<void
       .query(`
         SELECT ic.identificador, ic.subastado,
                ${priceField}
+               pr.identificador as productoId,
                pr.descripcionCatalogo, pr.descripcionCompleta,
                pr.fecha as fechaProducto,
                pe.nombre as duenioNombre,
@@ -114,7 +112,38 @@ export async function getCatalogo(req: AuthRequest, res: Response): Promise<void
         ORDER BY ic.identificador
       `);
 
-    res.json({ success: true, data: result.recordset });
+    const items = result.recordset;
+
+    const productoIds = items
+      .map((i: any) => i.productoId)
+      .filter((v: any) => typeof v === 'number');
+
+    const fotoMap = new Map<number, string>();
+
+    if (productoIds.length > 0) {
+      const fotosResult = await pool.request()
+        .query(`
+          SELECT f.producto, f.foto, f.identificador
+          FROM fotos f
+          INNER JOIN (
+            SELECT producto, MIN(identificador) as minId
+            FROM fotos
+            WHERE producto IN (${productoIds.join(',')})
+            GROUP BY producto
+          ) ff ON ff.producto = f.producto AND ff.minId = f.identificador
+        `);
+
+      for (const row of fotosResult.recordset) {
+        fotoMap.set(row.producto, `data:image/jpeg;base64,${Buffer.from(row.foto).toString('base64')}`);
+      }
+    }
+
+    const withFotos = items.map((item: any) => ({
+      ...item,
+      fotoData: fotoMap.get(item.productoId) || null,
+    }));
+
+    res.json({ success: true, data: withFotos });
   } catch (error) {
     console.error('Error getCatalogo:', error);
     res.status(500).json({ success: false, error: 'Error interno del servidor' });
@@ -139,6 +168,7 @@ export async function getItemDetalle(req: AuthRequest, res: Response): Promise<v
                pr.identificador as productoId,
                pr.descripcionCatalogo, pr.descripcionCompleta,
                pr.fecha as fechaProducto, pr.disponible,
+               pr.esObraDisenador, pr.nombreArtistaDisenador, pr.fechaObjeto, pr.historiaObjeto,
                pe.nombre as duenioNombre,
                c.descripcion as catalogoDescripcion,
                s.identificador as subastaId, s.fecha as subastaFecha,
@@ -160,11 +190,11 @@ export async function getItemDetalle(req: AuthRequest, res: Response): Promise<v
     // Obtener fotos
     const fotos = await pool.request()
       .input('productoId', result.recordset[0].productoId)
-      .query('SELECT identificador FROM fotos WHERE producto = @productoId');
+      .query('SELECT identificador, foto FROM fotos WHERE producto = @productoId ORDER BY identificador');
 
     const item = {
       ...result.recordset[0],
-      fotos: fotos.recordset.map((f: any) => f.identificador),
+      fotos: fotos.recordset.map((f: any) => `data:image/jpeg;base64,${Buffer.from(f.foto).toString('base64')}`),
     };
 
     res.json({ success: true, data: item });

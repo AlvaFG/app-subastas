@@ -16,6 +16,13 @@ router.get('/solicitudes/:id', getSolicitudDetalle);
 
 router.post('/solicitudes',
   body('descripcion').notEmpty().withMessage('Descripcion requerida'),
+  body('valorBase').optional().isFloat({ min: 0.01 }).withMessage('Precio base debe ser un numero positivo'),
+  body('moneda').optional().isIn(['ARS', 'USD']).withMessage('Moneda invalida'),
+  body('horaSubasta').optional().matches(/^\d{2}:\d{2}(:\d{2})?$/).withMessage('Hora invalida. Use HH:mm'),
+  body('esObraDisenador').optional().isIn(['si', 'no']).withMessage('Valor invalido para obra/disenador'),
+  body('nombreArtistaDisenador').optional({ values: 'null' }).isString(),
+  body('historiaObjeto').optional({ values: 'null' }).isString(),
+  body('fotos').optional().isArray({ min: 1 }),
   body('declaracionPropiedad').equals('si').withMessage('Debe declarar propiedad del bien'),
   validate,
   createSolicitud,

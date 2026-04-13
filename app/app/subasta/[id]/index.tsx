@@ -13,11 +13,13 @@ interface CatalogoItem {
   precioBase?: number;
   comision?: number;
   subastado: string;
+  productoId: number;
   descripcionCatalogo: string;
   descripcionCompleta: string;
   duenioNombre: string;
   catalogoDescripcion: string;
   fotoId: number | null;
+  fotoData: string | null;
 }
 
 export default function CatalogoScreen() {
@@ -48,6 +50,7 @@ export default function CatalogoScreen() {
       title={item.descripcionCatalogo || 'Sin descripcion'}
       price={item.precioBase}
       description={item.descripcionCompleta}
+      imageUrl={item.fotoData || undefined}
       onPress={() => router.push(`/item/${item.identificador}`)}
     />
   );

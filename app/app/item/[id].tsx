@@ -25,7 +25,11 @@ interface ItemDetalle {
   subastaHora: string;
   subastaCat: string;
   moneda: string;
-  fotos: number[];
+  esObraDisenador?: string;
+  nombreArtistaDisenador?: string;
+  fechaObjeto?: string;
+  historiaObjeto?: string;
+  fotos: string[];
 }
 
 export default function ItemDetalleScreen() {
@@ -72,15 +76,31 @@ export default function ItemDetalleScreen() {
   const formatPrice = (price: number) =>
     `${item.moneda === 'USD' ? 'US$' : '$'} ${price.toLocaleString('es-AR')}`;
 
+  const formatTime = (hora: string) => {
+    if (!hora) return '--:--';
+    if (/^\d{2}:\d{2}(:\d{2})?$/.test(hora)) return hora.slice(0, 5);
+    const d = new Date(hora);
+    if (Number.isNaN(d.getTime())) return '--:--';
+    return d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hour12: false });
+  };
+
   return (
     <ScrollView style={styles.container}>
       <Stack.Screen options={{ headerShown: true, title: `Pieza #${item.identificador}` }} />
 
-      {/* Image gallery placeholder */}
+      {/* Image gallery */}
       <View style={styles.gallery}>
-        <View style={styles.imagePlaceholder}>
-          <Text style={styles.imageCount}>{item.fotos.length} fotos</Text>
-        </View>
+        {item.fotos.length > 0 ? (
+          <ScrollView horizontal pagingEnabled showsHorizontalScrollIndicator={false}>
+            {item.fotos.map((foto, index) => (
+              <Image key={index} source={{ uri: foto }} style={styles.galleryImage} resizeMode="cover" />
+            ))}
+          </ScrollView>
+        ) : (
+          <View style={styles.imagePlaceholder}>
+            <Text style={styles.imageCount}>Sin fotos disponibles</Text>
+          </View>
+        )}
       </View>
 
       <View style={styles.content}>
@@ -107,6 +127,15 @@ export default function ItemDetalleScreen() {
           <Text style={styles.description}>{item.descripcionCompleta}</Text>
         </View>
 
+        {item.esObraDisenador === 'si' && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Obra / Diseniador</Text>
+            {item.nombreArtistaDisenador && <DetailRow label="Autor" value={item.nombreArtistaDisenador} />}
+            {item.fechaObjeto && <DetailRow label="Fecha obra" value={new Date(item.fechaObjeto).toLocaleDateString('es-AR')} />}
+            {item.historiaObjeto && <DetailRow label="Historia" value={item.historiaObjeto} />}
+          </View>
+        )}
+
         {/* Details */}
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Detalles</Text>
@@ -120,7 +149,7 @@ export default function ItemDetalleScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Subasta</Text>
           <DetailRow label="Fecha" value={new Date(item.subastaFecha).toLocaleDateString('es-AR')} />
-          <DetailRow label="Hora" value={item.subastaHora?.slice(0, 5)} />
+          <DetailRow label="Hora" value={formatTime(item.subastaHora)} />
         </View>
       </View>
     </ScrollView>
@@ -141,6 +170,7 @@ const styles = StyleSheet.create({
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.ivory },
   errorText: { fontFamily: fonts.body, fontSize: fontSizes.base, color: colors.alertEmber },
   gallery: { width, aspectRatio: 4 / 3, backgroundColor: colors.parchment },
+  galleryImage: { width, height: width * 0.75 },
   imagePlaceholder: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   imageCount: { fontFamily: fonts.bodyMedium, fontSize: fontSizes.sm, color: colors.textMuted },
   content: { padding: spacing.lg },

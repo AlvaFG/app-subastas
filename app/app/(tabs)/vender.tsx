@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, Switch, Alert, FlatList, TouchableOpacity,
+  View, Text, StyleSheet, ScrollView, Switch, Alert, FlatList, TouchableOpacity, Image,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { Button, Input, Badge } from '../../src/components';
@@ -20,6 +20,11 @@ interface Solicitud {
   aceptadoPorUsuario: string | null;
 }
 
+interface FotoSeleccionada {
+  uri: string;
+  base64: string;
+}
+
 export default function VenderScreen() {
   const { isAuthenticated } = useAuthStore();
   const [tab, setTab] = useState<'nueva' | 'mis'>('nueva');
@@ -27,8 +32,15 @@ export default function VenderScreen() {
   // Form state
   const [descripcion, setDescripcion] = useState('');
   const [datosHistoricos, setDatosHistoricos] = useState('');
+  const [precioBase, setPrecioBase] = useState('');
+  const [moneda, setMoneda] = useState<'ARS' | 'USD'>('ARS');
+  const [horaSubasta, setHoraSubasta] = useState('10:00');
+  const [esObraDisenador, setEsObraDisenador] = useState(false);
+  const [nombreArtistaDisenador, setNombreArtistaDisenador] = useState('');
+  const [fechaObjeto, setFechaObjeto] = useState('');
+  const [historiaObjeto, setHistoriaObjeto] = useState('');
   const [declaracion, setDeclaracion] = useState(false);
-  const [fotos, setFotos] = useState<string[]>([]);
+  const [fotos, setFotos] = useState<FotoSeleccionada[]>([]);
   const [loading, setLoading] = useState(false);
 
   // List state
@@ -58,17 +70,23 @@ export default function VenderScreen() {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
       allowsMultipleSelection: true,
-      quality: 0.8,
+      base64: true,
+      quality: 0.45,
     });
     if (!result.canceled) {
-      const newPhotos = result.assets.map((a) => a.uri);
-      setFotos((prev) => [...prev, ...newPhotos]);
+      const newPhotos = result.assets
+        .filter((a) => !!a.base64)
+        .map((a) => ({ uri: a.uri, base64: a.base64! }));
+      setFotos((prev) => [...prev, ...newPhotos].slice(0, 12));
     }
   };
 
   const handleSubmit = async () => {
     if (!descripcion) { Alert.alert('Error', 'Ingrese una descripcion del bien'); return; }
     if (fotos.length < 6) { Alert.alert('Error', `Debe subir al menos 6 fotos (tiene ${fotos.length})`); return; }
+    if (!precioBase) { Alert.alert('Error', 'Ingrese un precio base'); return; }
+    if (!/^\d{2}:\d{2}$/.test(horaSubasta)) { Alert.alert('Error', 'Ingrese una hora valida (HH:mm)'); return; }
+    if (esObraDisenador && !nombreArtistaDisenador.trim()) { Alert.alert('Error', 'Ingrese nombre de artista/diseniador'); return; }
     if (!declaracion) { Alert.alert('Error', 'Debe declarar que el bien le pertenece'); return; }
 
     setLoading(true);
@@ -76,12 +94,26 @@ export default function VenderScreen() {
       await api.post('/venta/solicitudes', {
         descripcion,
         datosHistoricos: datosHistoricos || null,
+        valorBase: parseFloat(precioBase),
+        moneda,
+        horaSubasta,
+        esObraDisenador: esObraDisenador ? 'si' : 'no',
+        nombreArtistaDisenador: esObraDisenador ? nombreArtistaDisenador : null,
+        fechaObjeto: esObraDisenador ? (fechaObjeto || null) : null,
+        historiaObjeto: esObraDisenador ? (historiaObjeto || null) : null,
+        fotos: fotos.map((f) => f.base64),
         declaracionPropiedad: 'si',
       });
-      // TODO: upload fotos to Cloudinary
-      Alert.alert('Solicitud enviada', 'La empresa evaluara su solicitud.');
+      Alert.alert('Solicitud enviada', 'La solicitud se aceptara automaticamente en 30 segundos.');
       setDescripcion('');
       setDatosHistoricos('');
+      setPrecioBase('');
+      setMoneda('ARS');
+      setHoraSubasta('10:00');
+      setEsObraDisenador(false);
+      setNombreArtistaDisenador('');
+      setFechaObjeto('');
+      setHistoriaObjeto('');
       setDeclaracion(false);
       setFotos([]);
       setTab('mis');
@@ -149,6 +181,70 @@ export default function VenderScreen() {
             onChangeText={setDatosHistoricos}
             multiline
           />
+          <Input
+            label="Precio base"
+            placeholder="Ej: 5000"
+            value={precioBase}
+            onChangeText={setPrecioBase}
+            keyboardType="decimal-pad"
+          />
+
+          <Text style={styles.sectionTitle}>Moneda de la subasta</Text>
+          <View style={styles.currencyRow}>
+            <TouchableOpacity
+              style={[styles.currencyChip, moneda === 'ARS' && styles.currencyChipActive]}
+              onPress={() => setMoneda('ARS')}
+            >
+              <Text style={[styles.currencyText, moneda === 'ARS' && styles.currencyTextActive]}>Pesos (ARS)</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.currencyChip, moneda === 'USD' && styles.currencyChipActive]}
+              onPress={() => setMoneda('USD')}
+            >
+              <Text style={[styles.currencyText, moneda === 'USD' && styles.currencyTextActive]}>Dolares (USD)</Text>
+            </TouchableOpacity>
+          </View>
+
+          <Input
+            label="Hora de la subasta (definida por el vendedor)"
+            placeholder="HH:mm"
+            value={horaSubasta}
+            onChangeText={setHoraSubasta}
+          />
+
+          <View style={styles.declarationRow}>
+            <Switch
+              value={esObraDisenador}
+              onValueChange={setEsObraDisenador}
+              trackColor={{ true: colors.auctionGold, false: colors.border }}
+              thumbColor={colors.ivory}
+            />
+            <Text style={styles.declarationText}>Es obra de arte u objeto de diseniador</Text>
+          </View>
+
+          {esObraDisenador && (
+            <>
+              <Input
+                label="Nombre del artista/diseniador"
+                placeholder="Ej: Xul Solar / Philippe Starck"
+                value={nombreArtistaDisenador}
+                onChangeText={setNombreArtistaDisenador}
+              />
+              <Input
+                label="Fecha de la obra/objeto"
+                placeholder="YYYY-MM-DD"
+                value={fechaObjeto}
+                onChangeText={setFechaObjeto}
+              />
+              <Input
+                label="Historia del objeto"
+                placeholder="Contexto, dueños anteriores, curiosidades..."
+                value={historiaObjeto}
+                onChangeText={setHistoriaObjeto}
+                multiline
+              />
+            </>
+          )}
 
           {/* Photos */}
           <Text style={styles.sectionTitle}>Fotos (minimo 6)</Text>
@@ -160,7 +256,7 @@ export default function VenderScreen() {
             <ScrollView horizontal style={styles.photoStrip}>
               {fotos.map((uri, i) => (
                 <View key={i} style={styles.photoThumb}>
-                  <Text style={styles.photoThumbText}>{i + 1}</Text>
+                  <Image source={{ uri: uri.uri }} style={styles.photoImage} />
                 </View>
               ))}
             </ScrollView>
@@ -244,7 +340,13 @@ const styles = StyleSheet.create({
   photoCount: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.textSecondary },
   photoStrip: { marginBottom: spacing.lg },
   photoThumb: { width: 64, height: 64, borderRadius: radius.sm, backgroundColor: colors.parchment, justifyContent: 'center', alignItems: 'center', marginRight: spacing.sm },
+  photoImage: { width: '100%', height: '100%', borderRadius: radius.sm },
   photoThumbText: { fontFamily: fonts.bodyMedium, fontSize: fontSizes.sm, color: colors.textMuted },
+  currencyRow: { flexDirection: 'row', gap: spacing.sm, marginBottom: spacing.md },
+  currencyChip: { flex: 1, paddingVertical: spacing.sm, borderRadius: radius.xl, backgroundColor: colors.parchment, alignItems: 'center' },
+  currencyChipActive: { backgroundColor: colors.auctionGold },
+  currencyText: { fontFamily: fonts.bodyMedium, fontSize: fontSizes.sm, color: colors.textSecondary },
+  currencyTextActive: { color: colors.ink },
   declarationRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginVertical: spacing.lg, backgroundColor: colors.parchment, padding: spacing.md, borderRadius: radius.md },
   declarationText: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.textPrimary, flex: 1 },
   listContent: { padding: spacing.lg, gap: spacing.md, paddingBottom: spacing['3xl'] },
