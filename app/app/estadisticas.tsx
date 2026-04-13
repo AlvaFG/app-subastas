@@ -13,6 +13,12 @@ interface Estadisticas {
   totalPujado: number;
   totalPagado: number;
   totalComisiones: number;
+  totalPujadoARS: number;
+  totalPujadoUSD: number;
+  totalPagadoARS: number;
+  totalPagadoUSD: number;
+  totalComisionesARS: number;
+  totalComisionesUSD: number;
   porCategoria: { categoria: string; cantidad: number }[];
   multas: { total: number; impagas: number };
 }
@@ -57,6 +63,16 @@ export default function EstadisticasScreen() {
     );
   }
 
+  const formatCurrency = (amount: number, moneda: 'ARS' | 'USD') =>
+    `${moneda === 'USD' ? 'US$' : '$'} ${Number(amount || 0).toFixed(2)}`;
+
+  const totalPujadoARS = Number(data.totalPujadoARS ?? data.totalPujado ?? 0);
+  const totalPujadoUSD = Number(data.totalPujadoUSD ?? 0);
+  const totalPagadoARS = Number(data.totalPagadoARS ?? data.totalPagado ?? 0);
+  const totalPagadoUSD = Number(data.totalPagadoUSD ?? 0);
+  const totalComisionesARS = Number(data.totalComisionesARS ?? data.totalComisiones ?? 0);
+  const totalComisionesUSD = Number(data.totalComisionesUSD ?? 0);
+
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
       <Text style={styles.title}>Mis Estadisticas</Text>
@@ -65,9 +81,12 @@ export default function EstadisticasScreen() {
         <StatCard icon="hammer" label="Subastas Asistidas" value={data.subastasAsistidas} />
         <StatCard icon="trophy" label="Subastas Ganadas" value={data.subastasGanadas} color={colors.auctionGold} />
         <StatCard icon="trending-up" label="Total Pujas" value={data.totalPujas} />
-        <StatCard icon="cash" label="Total Pujado" value={`$ ${data.totalPujado.toFixed(2)}`} />
-        <StatCard icon="card" label="Total Pagado" value={`$ ${data.totalPagado.toFixed(2)}`} />
-        <StatCard icon="receipt" label="Comisiones" value={`$ ${data.totalComisiones.toFixed(2)}`} />
+        <StatCard icon="cash" label="Total Pujado en Pesos" value={formatCurrency(totalPujadoARS, 'ARS')} />
+        <StatCard icon="cash" label="Total Pujado en Dolares" value={formatCurrency(totalPujadoUSD, 'USD')} />
+        <StatCard icon="card" label="Total Pagado en Pesos" value={formatCurrency(totalPagadoARS, 'ARS')} />
+        <StatCard icon="card" label="Total Pagado en Dolares" value={formatCurrency(totalPagadoUSD, 'USD')} />
+        <StatCard icon="receipt" label="Comisiones en Pesos" value={formatCurrency(totalComisionesARS, 'ARS')} />
+        <StatCard icon="receipt" label="Comisiones en Dolares" value={formatCurrency(totalComisionesUSD, 'USD')} />
       </View>
 
       {data.porCategoria.length > 0 && (

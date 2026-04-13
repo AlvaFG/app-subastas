@@ -153,7 +153,7 @@ async function finalizeItemForPayment(io: Server, subastaId: number, itemId: num
       SELECT identificador, tipo, descripcion, moneda, internacional, montoDisponible
       FROM mediosDePago
       WHERE cliente = @cliente AND verificado = 'si' AND activo = 'si'
-        AND (moneda = @moneda OR internacional = 'si')
+        AND moneda = @moneda
       ORDER BY identificador DESC
     `);
 
@@ -457,7 +457,7 @@ export function setupAuctionSocket(io: Server) {
           .query(`
             SELECT COUNT(*) as count FROM mediosDePago
             WHERE cliente = @cliente2 AND verificado = 'si' AND activo = 'si'
-              AND (moneda = @moneda OR internacional = 'si')
+              AND moneda = @moneda
           `);
 
         if (mediosCompat.recordset[0].count === 0) {
@@ -620,7 +620,7 @@ export function setupAuctionSocket(io: Server) {
         }
 
         const mp = medio.recordset[0];
-        const monedaCompatible = mp.moneda === pending.moneda || mp.internacional === 'si';
+        const monedaCompatible = mp.moneda === pending.moneda;
         if (!monedaCompatible) {
           callback({ success: false, error: `El medio no es compatible con ${pending.moneda}` });
           return;
@@ -694,6 +694,8 @@ export function setupAuctionSocket(io: Server) {
             multa: importeMulta,
             fechaLimite,
           });
+
+          await closeAuction(io, pending.subastaId);
 
           callback({ success: false, error: mensajeMulta });
           return;

@@ -23,26 +23,34 @@ export async function getEstadisticas(req: AuthRequest, res: Response): Promise<
         WHERE a.cliente = @cliente AND p.ganador = 'si'
       `);
 
-    // Total pujado e importes pagados
+    // Total pujado por moneda
     const importes = await pool.request()
       .input('cliente', clienteId)
       .query(`
         SELECT
-          COALESCE(SUM(p.importe), 0) as totalPujado,
+          COALESCE(SUM(CASE WHEN s.moneda = 'ARS' THEN p.importe ELSE 0 END), 0) as totalPujadoARS,
+          COALESCE(SUM(CASE WHEN s.moneda = 'USD' THEN p.importe ELSE 0 END), 0) as totalPujadoUSD,
           COUNT(p.identificador) as totalPujas
         FROM pujos p
         INNER JOIN asistentes a ON a.identificador = p.asistente
+        INNER JOIN itemsCatalogo ic ON ic.identificador = p.item
+        INNER JOIN catalogos c ON c.identificador = ic.catalogo
+        INNER JOIN subastas s ON s.identificador = c.subasta
         WHERE a.cliente = @cliente
       `);
 
+    // Total pagado y comisiones por moneda
     const pagados = await pool.request()
       .input('cliente', clienteId)
       .query(`
         SELECT
-          COALESCE(SUM(importe), 0) as totalPagado,
-          COALESCE(SUM(comision), 0) as totalComisiones
-        FROM registroDeSubasta
-        WHERE cliente = @cliente
+          COALESCE(SUM(CASE WHEN s.moneda = 'ARS' THEN r.importe ELSE 0 END), 0) as totalPagadoARS,
+          COALESCE(SUM(CASE WHEN s.moneda = 'USD' THEN r.importe ELSE 0 END), 0) as totalPagadoUSD,
+          COALESCE(SUM(CASE WHEN s.moneda = 'ARS' THEN r.comision ELSE 0 END), 0) as totalComisionesARS,
+          COALESCE(SUM(CASE WHEN s.moneda = 'USD' THEN r.comision ELSE 0 END), 0) as totalComisionesUSD
+        FROM registroDeSubasta r
+        INNER JOIN subastas s ON s.identificador = r.subasta
+        WHERE r.cliente = @cliente
       `);
 
     // Participacion por categoria
@@ -71,9 +79,15 @@ export async function getEstadisticas(req: AuthRequest, res: Response): Promise<
         subastasAsistidas: asistidas.recordset[0].total,
         subastasGanadas: ganadas.recordset[0].total,
         totalPujas: importes.recordset[0].totalPujas,
-        totalPujado: parseFloat(importes.recordset[0].totalPujado),
-        totalPagado: parseFloat(pagados.recordset[0].totalPagado),
-        totalComisiones: parseFloat(pagados.recordset[0].totalComisiones),
+        totalPujado: parseFloat(importes.recordset[0].totalPujadoARS) + parseFloat(importes.recordset[0].totalPujadoUSD),
+        totalPagado: parseFloat(pagados.recordset[0].totalPagadoARS) + parseFloat(pagados.recordset[0].totalPagadoUSD),
+        totalComisiones: parseFloat(pagados.recordset[0].totalComisionesARS) + parseFloat(pagados.recordset[0].totalComisionesUSD),
+        totalPujadoARS: parseFloat(importes.recordset[0].totalPujadoARS),
+        totalPujadoUSD: parseFloat(importes.recordset[0].totalPujadoUSD),
+        totalPagadoARS: parseFloat(pagados.recordset[0].totalPagadoARS),
+        totalPagadoUSD: parseFloat(pagados.recordset[0].totalPagadoUSD),
+        totalComisionesARS: parseFloat(pagados.recordset[0].totalComisionesARS),
+        totalComisionesUSD: parseFloat(pagados.recordset[0].totalComisionesUSD),
         porCategoria: porCategoria.recordset,
         multas: {
           total: multas.recordset[0].total,

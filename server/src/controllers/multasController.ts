@@ -95,7 +95,7 @@ export async function pagarMulta(req: AuthRequest, res: Response): Promise<void>
       .input('id', id)
       .input('cliente', req.user!.id)
       .query(`
-        SELECT identificador, pagada, importeMulta, ${selectMoneda}
+        SELECT identificador, pagada, importeMulta, importeOriginal, ${selectMoneda}
         FROM multas
         WHERE identificador = @id AND cliente = @cliente
       `);
@@ -111,18 +111,20 @@ export async function pagarMulta(req: AuthRequest, res: Response): Promise<void>
     }
 
     const importeMulta = Number(multa.recordset[0].importeMulta || 0);
+    const importeOriginal = Number(multa.recordset[0].importeOriginal || 0);
+    const totalAdeudado = +(importeMulta + importeOriginal).toFixed(2);
     const multaMoneda = multa.recordset[0].moneda;
 
-    // Validate payment method exists and belongs to user, with currency compatibility
+    // Validate payment method exists and belongs to user, with strict currency compatibility
     const medioPago = await pool.request()
       .input('medioPagoId', medioPagoId)
       .input('cliente', req.user!.id)
       .input('moneda', multaMoneda)
       .query(`
-        SELECT identificador, montoDisponible, tipo, moneda, internacional
+        SELECT identificador, montoDisponible, tipo, moneda
         FROM mediosDePago
         WHERE identificador = @medioPagoId AND cliente = @cliente AND activo = 'si'
-          AND (moneda = @moneda OR internacional = 'si')
+          AND moneda = @moneda
       `);
 
     if (medioPago.recordset.length === 0) {
@@ -133,21 +135,21 @@ export async function pagarMulta(req: AuthRequest, res: Response): Promise<void>
     const montoDisponible = Number(medioPago.recordset[0].montoDisponible || 0);
 
     // Validate sufficient balance
-    if (montoDisponible < importeMulta) {
+    if (montoDisponible < totalAdeudado) {
       res.status(400).json({ 
         success: false, 
-        error: `Saldo insuficiente. Se necesitan ${multaMoneda} ${importeMulta.toFixed(2)} pero el medio tiene ${multaMoneda} ${montoDisponible.toFixed(2)}`
+        error: `Saldo insuficiente. Debe pagar oferta (${multaMoneda} ${importeOriginal.toFixed(2)}) + multa (${multaMoneda} ${importeMulta.toFixed(2)}). Total: ${multaMoneda} ${totalAdeudado.toFixed(2)}. Disponible: ${multaMoneda} ${montoDisponible.toFixed(2)}`
       });
       return;
     }
 
-    // Deduct from payment method and mark multa as paid
+    // Deduct original bid + fine from payment method and mark fine as paid
     await pool.request()
       .input('medioPagoId', medioPagoId)
-      .input('importeMulta', importeMulta)
+      .input('totalAdeudado', totalAdeudado)
       .query(`
         UPDATE mediosDePago
-        SET montoDisponible = montoDisponible - @importeMulta
+        SET montoDisponible = montoDisponible - @totalAdeudado
         WHERE identificador = @medioPagoId
       `);
 
@@ -159,7 +161,7 @@ export async function pagarMulta(req: AuthRequest, res: Response): Promise<void>
     await pool.request()
       .input('cliente', req.user!.id)
       .input('titulo', 'Multa pagada')
-      .input('mensaje', `Se registró el pago de su multa por $${importeMulta.toFixed(2)}. Ya puede volver a pujar.`)
+      .input('mensaje', `Se registró el pago de su deuda: oferta ${multaMoneda} ${importeOriginal.toFixed(2)} + multa ${multaMoneda} ${importeMulta.toFixed(2)} (total ${multaMoneda} ${totalAdeudado.toFixed(2)}). Ya puede volver a pujar.`)
       .query(`
         INSERT INTO notificaciones (cliente, tipo, titulo, mensaje)
         VALUES (@cliente, 'sistema', @titulo, @mensaje)

@@ -55,6 +55,11 @@ export default function MediosPagoScreen() {
     [medios],
   );
 
+  const totalBalance = useMemo(
+    () => totalBalanceARS + totalBalanceUSD,
+    [totalBalanceARS, totalBalanceUSD],
+  );
+
   const fetchMedios = useCallback(async () => {
     setLoading(true);
     try {
@@ -158,13 +163,10 @@ export default function MediosPagoScreen() {
             <Text style={styles.subtitle}>Simulador de fondos para subasta</Text>
 
             <View style={[styles.balanceCard, shadows.sm]}>
-              <Text style={styles.balanceLabel}>Balance ARS</Text>
-              <Text style={styles.balanceValue}>$ {totalBalanceARS.toLocaleString('es-AR', { minimumFractionDigits: 2 })}</Text>
-            </View>
-
-            <View style={[styles.balanceCard, shadows.sm]}>
-              <Text style={styles.balanceLabel}>Balance USD</Text>
-              <Text style={styles.balanceValue}>US$ {totalBalanceUSD.toLocaleString('es-AR', { minimumFractionDigits: 2 })}</Text>
+              <Text style={styles.balanceLabel}>Balance disponible total</Text>
+              <Text style={styles.balanceValue}>$ {totalBalance.toLocaleString('es-AR', { minimumFractionDigits: 2 })}</Text>
+              <Text style={styles.balanceBreakdown}>Pesos (ARS): $ {totalBalanceARS.toLocaleString('es-AR', { minimumFractionDigits: 2 })}</Text>
+              <Text style={styles.balanceBreakdown}>Dolares (USD): US$ {totalBalanceUSD.toLocaleString('es-AR', { minimumFractionDigits: 2 })}</Text>
             </View>
 
             <View style={[styles.formCard, shadows.md]}>
@@ -293,6 +295,7 @@ const styles = StyleSheet.create({
   balanceCard: { backgroundColor: colors.parchment, borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.md },
   balanceLabel: { fontFamily: fonts.bodyMedium, fontSize: fontSizes.sm, color: colors.textSecondary },
   balanceValue: { fontFamily: fonts.display, fontSize: fontSizes.xl, color: colors.auctionGold, marginTop: spacing.xs },
+  balanceBreakdown: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.textSecondary, marginTop: spacing.xs },
   formCard: { backgroundColor: colors.ivory, borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.lg },
   sectionTitle: { fontFamily: fonts.headingSemibold, fontSize: fontSizes.lg, color: colors.textPrimary, marginBottom: spacing.sm },
   fieldLabel: { fontFamily: fonts.bodyMedium, fontSize: fontSizes.sm, color: colors.textSecondary, marginBottom: spacing.xs },
