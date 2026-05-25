@@ -44,9 +44,12 @@ describe('Auth E2E', () => {
   describe('POST /api/auth/register/step1', () => {
     const validBody = {
       documento: '12345678',
-      nombre: 'Juan Perez',
+      nombre: 'Juan',
+      apellido: 'Perez',
       direccion: 'Calle 123',
       numeroPais: 1,
+      fotoFrente: 'data:image/png;base64,AAA',
+      fotoDorso: 'data:image/png;base64,BBB',
     };
 
     it('should register step1 successfully', async () => {
@@ -81,7 +84,7 @@ describe('Auth E2E', () => {
     it('should return 400 when documento is missing', async () => {
       const res = await request(app)
         .post('/api/auth/register/step1')
-        .send({ nombre: 'Juan', direccion: 'Calle', numeroPais: 1 });
+        .send({ nombre: 'Juan', apellido: 'Perez', direccion: 'Calle', numeroPais: 1 });
 
       expect(res.status).toBe(400);
       expect(res.body.success).toBe(false);
@@ -99,7 +102,7 @@ describe('Auth E2E', () => {
     it('should return 400 when numeroPais is not an integer', async () => {
       const res = await request(app)
         .post('/api/auth/register/step1')
-        .send({ documento: '123', nombre: 'Juan', direccion: 'Calle', numeroPais: 'abc' });
+        .send({ documento: '123', nombre: 'Juan', apellido: 'Perez', direccion: 'Calle', numeroPais: 'abc' });
 
       expect(res.status).toBe(400);
       expect(res.body.success).toBe(false);

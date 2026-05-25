@@ -1,13 +1,15 @@
 import { Request, Response } from 'express';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
+import sql from 'mssql';
 import { connectDB } from '../models/db';
 import { AuthRequest } from '../middleware/auth';
 
 // T202: POST /auth/register/step1
 export async function registerStep1(req: Request, res: Response): Promise<void> {
   try {
-    const { documento, nombre, direccion, numeroPais, fotoFrente, fotoDorso } = req.body;
+    const { documento, nombre, apellido, direccion, numeroPais, fotoFrente, fotoDorso } = req.body;
+    const fullName = apellido ? `${nombre} ${apellido}` : nombre;
 
     const pool = await connectDB();
 
@@ -24,7 +26,7 @@ export async function registerStep1(req: Request, res: Response): Promise<void> 
     // Insertar persona
     const personaResult = await pool.request()
       .input('documento', documento)
-      .input('nombre', nombre)
+      .input('nombre', fullName)
       .input('direccion', direccion)
       .input('estado', 'activo')
       .query(`
@@ -35,17 +37,40 @@ export async function registerStep1(req: Request, res: Response): Promise<void> 
 
     const personaId = personaResult.recordset[0].identificador;
 
+    // Verificar que el numeroPais exista en la tabla `paises` para evitar violacion FK.
+    let numeroPaisToInsert: number | null = null;
+    if (numeroPais !== undefined && numeroPais !== null) {
+      const parsed = parseInt(String(numeroPais), 10);
+      if (!Number.isNaN(parsed)) {
+        const paisCheck = await pool.request()
+          .input('numeroPais', parsed)
+          .query('SELECT numero FROM paises WHERE numero = @numeroPais');
+        if (paisCheck.recordset.length > 0) {
+          numeroPaisToInsert = parsed;
+        } else {
+          console.warn(`Pais con numero ${parsed} no encontrado en tabla paises; se insertara NULL en clientes.numeroPais.`);
+        }
+      }
+    }
+
     // Auto-aprobar al usuario al completar etapa 1 si supera las validaciones de entrada.
-    await pool.request()
+    const insertReq = pool.request()
       .input('identificador', personaId)
-      .input('numeroPais', numeroPais)
       .input('admitido', 'si')
       .input('categoria', 'comun')
-      .input('verificador', 1) // TODO: asignar verificador real
-      .query(`
-        INSERT INTO clientes (identificador, numeroPais, admitido, categoria, verificador)
-        VALUES (@identificador, @numeroPais, @admitido, @categoria, @verificador)
-      `);
+      .input('verificador', 1); // TODO: asignar verificador real
+
+    // Si existe un numeroPais valido, adjuntarlo con tipo Int, sino pasar NULL
+    if (numeroPaisToInsert !== null) {
+      insertReq.input('numeroPais', sql.Int, numeroPaisToInsert);
+    } else {
+      insertReq.input('numeroPais', sql.Int, null);
+    }
+
+    await insertReq.query(`
+      INSERT INTO clientes (identificador, numeroPais, admitido, categoria, verificador)
+      VALUES (@identificador, @numeroPais, @admitido, @categoria, @verificador)
+    `);
 
     // TODO: Guardar fotos documento en Cloudinary (fotoFrente, fotoDorso)
 

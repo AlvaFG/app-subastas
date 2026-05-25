@@ -1,13 +1,15 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, TouchableOpacity } from 'react-native';
 import { router } from 'expo-router';
 import * as ImagePicker from 'expo-image-picker';
 import { Button, Input } from '../../../src/components';
 import { colors, fonts, fontSizes, spacing } from '../../../src/theme';
 import { useAuthStore } from '../../../src/store/authStore';
+import countries from '../../../src/utils/countries';
 
 export default function RegisterStep1Screen() {
   const [nombre, setNombre] = useState('');
+  const [apellido, setApellido] = useState('');
   const [documento, setDocumento] = useState('');
   const [direccion, setDireccion] = useState('');
   const [numeroPais, setNumeroPais] = useState('');
@@ -15,6 +17,8 @@ export default function RegisterStep1Screen() {
   const [fotoDorso, setFotoDorso] = useState<string | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showCountryList, setShowCountryList] = useState(false);
+  const [selectedCountry, setSelectedCountry] = useState<string | null>(null);
   const registerStep1 = useAuthStore((s) => s.registerStep1);
 
   const pickImage = async (side: 'frente' | 'dorso') => {
@@ -31,7 +35,7 @@ export default function RegisterStep1Screen() {
 
   const handleSubmit = async () => {
     setError('');
-    if (!nombre || !documento || !direccion || !numeroPais) {
+    if (!nombre || !apellido || !documento || !direccion || !numeroPais || !fotoFrente || !fotoDorso) {
       setError('Complete todos los campos obligatorios');
       return;
     }
@@ -40,8 +44,11 @@ export default function RegisterStep1Screen() {
       const id = await registerStep1({
         documento,
         nombre,
+        apellido,
         direccion,
-        numeroPais: parseInt(numeroPais),
+        numeroPais: parseInt(numeroPais, 10),
+        fotoFrente,
+        fotoDorso,
       });
       router.replace(`/(auth)/register/step2?identificador=${id}`);
     } catch (err: any) {
@@ -56,54 +63,41 @@ export default function RegisterStep1Screen() {
       <Text style={styles.title}>Registro - Etapa 1</Text>
       <Text style={styles.subtitle}>Datos personales</Text>
 
-      <Input
-        label="Nombre y Apellido"
-        leftIcon="person-outline"
-        placeholder="Juan Perez"
-        value={nombre}
-        onChangeText={setNombre}
-      />
-      <Input
-        label="Documento"
-        leftIcon="card-outline"
-        placeholder="12345678"
-        value={documento}
-        onChangeText={setDocumento}
-        keyboardType="numeric"
-      />
-      <Input
-        label="Domicilio Legal"
-        leftIcon="home-outline"
-        placeholder="Av. Siempreviva 742"
-        value={direccion}
-        onChangeText={setDireccion}
-      />
-      <Input
-        label="Pais (codigo)"
-        leftIcon="globe-outline"
-        placeholder="1"
-        value={numeroPais}
-        onChangeText={setNumeroPais}
-        keyboardType="numeric"
-      />
+      <Input label="Nombre" leftIcon="person-outline" placeholder="Juan" value={nombre} onChangeText={setNombre} />
+      <Input label="Apellido" leftIcon="person-outline" placeholder="Perez" value={apellido} onChangeText={setApellido} />
+
+      <Input label="Documento" leftIcon="card-outline" placeholder="12345678" value={documento} onChangeText={setDocumento} keyboardType="numeric" />
+
+      <Input label="Domicilio Legal" leftIcon="home-outline" placeholder="Av. Siempreviva 742" value={direccion} onChangeText={setDireccion} />
+
+      <Text style={styles.label}>País</Text>
+      <TouchableOpacity style={styles.countrySelect} onPress={() => setShowCountryList((s) => !s)}>
+        <Text style={styles.countryText}>{selectedCountry ? `${selectedCountry} (+${numeroPais})` : 'Seleccionar país'}</Text>
+      </TouchableOpacity>
+
+      {showCountryList ? (
+        <ScrollView style={styles.countryList} nestedScrollEnabled>
+          {countries.map((c) => (
+            <TouchableOpacity
+              key={c.code}
+              style={styles.countryItem}
+              onPress={() => {
+                setSelectedCountry(c.name);
+                setNumeroPais(c.callingCode);
+                setShowCountryList(false);
+              }}
+            >
+              <Text style={styles.countryItemText}>{`${c.name} (+${c.callingCode})`}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      ) : null}
 
       <Text style={styles.sectionTitle}>Foto del Documento</Text>
 
       <View style={styles.photoRow}>
-        <Button
-          title={fotoFrente ? 'Frente OK' : 'Subir Frente'}
-          variant={fotoFrente ? 'secondary' : 'outline'}
-          size="sm"
-          onPress={() => pickImage('frente')}
-          style={styles.photoBtn}
-        />
-        <Button
-          title={fotoDorso ? 'Dorso OK' : 'Subir Dorso'}
-          variant={fotoDorso ? 'secondary' : 'outline'}
-          size="sm"
-          onPress={() => pickImage('dorso')}
-          style={styles.photoBtn}
-        />
+        <Button title={fotoFrente ? 'Frente OK' : 'Subir Frente'} variant={fotoFrente ? 'secondary' : 'outline'} size="sm" onPress={() => pickImage('frente')} style={styles.photoBtn} />
+        <Button title={fotoDorso ? 'Dorso OK' : 'Subir Dorso'} variant={fotoDorso ? 'secondary' : 'outline'} size="sm" onPress={() => pickImage('dorso')} style={styles.photoBtn} />
       </View>
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
@@ -122,4 +116,10 @@ const styles = StyleSheet.create({
   photoRow: { flexDirection: 'row', gap: spacing.md, marginBottom: spacing.lg },
   photoBtn: { flex: 1 },
   error: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.alertEmber, marginBottom: spacing.md, textAlign: 'center' },
+  label: { fontFamily: fonts.body, fontSize: fontSizes.base, color: colors.textSecondary, marginBottom: spacing.sm },
+  countrySelect: { padding: spacing.sm, borderWidth: 1, borderColor: colors.border, borderRadius: 5, marginBottom: spacing.md },
+  countryText: { fontFamily: fonts.body, fontSize: fontSizes.base, color: colors.textSecondary },
+  countryList: { maxHeight: 200, borderWidth: 1, borderColor: colors.border, borderRadius: 5, marginBottom: spacing.md },
+  countryItem: { padding: spacing.sm, borderBottomWidth: 1, borderBottomColor: colors.border },
+  countryItemText: { fontFamily: fonts.body, fontSize: fontSizes.base },
 });

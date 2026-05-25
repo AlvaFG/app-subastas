@@ -193,10 +193,11 @@ const options: swaggerJsdoc.Options = {
               'application/json': {
                 schema: {
                   type: 'object',
-                  required: ['documento', 'nombre', 'direccion', 'numeroPais'],
+                  required: ['documento', 'nombre', 'apellido', 'direccion', 'numeroPais', 'fotoFrente', 'fotoDorso'],
                   properties: {
                     documento: { type: 'string', example: '40123456' },
-                    nombre: { type: 'string', example: 'Juan Pérez' },
+                    nombre: { type: 'string', example: 'Juan' },
+                    apellido: { type: 'string', example: 'Pérez' },
                     direccion: { type: 'string', example: 'Av. Corrientes 1234' },
                     numeroPais: { type: 'integer', example: 1 },
                     fotoFrente: { type: 'string', description: 'Base64 o URL (Cloudinary)' },

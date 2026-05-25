@@ -24,8 +24,11 @@ interface AuthState {
 interface RegisterStep1Data {
   documento: string;
   nombre: string;
+  apellido?: string;
   direccion: string;
   numeroPais: number;
+  fotoFrente?: string;
+  fotoDorso?: string;
 }
 
 interface RegisterStep2Data {

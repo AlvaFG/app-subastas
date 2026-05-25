@@ -10,8 +10,11 @@ const router = Router();
 router.post('/register/step1',
   body('documento').notEmpty().withMessage('Documento requerido'),
   body('nombre').notEmpty().withMessage('Nombre requerido'),
+  body('apellido').notEmpty().withMessage('Apellido requerido'),
   body('direccion').notEmpty().withMessage('Direccion requerida'),
   body('numeroPais').isInt().withMessage('Pais requerido'),
+  body('fotoFrente').notEmpty().withMessage('fotoFrente requerida'),
+  body('fotoDorso').notEmpty().withMessage('fotoDorso requerida'),
   validate,
   registerStep1,
 );

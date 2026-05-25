@@ -1,0 +1,56 @@
+export type Country = {
+  name: string;
+  code: string; // ISO alpha-2
+  callingCode: string; // numeric string without +
+};
+
+const countries: Country[] = [
+  { name: 'Afganistán', code: 'AF', callingCode: '93' },
+  { name: 'Albania', code: 'AL', callingCode: '355' },
+  { name: 'Alemania', code: 'DE', callingCode: '49' },
+  { name: 'Andorra', code: 'AD', callingCode: '376' },
+  { name: 'Angola', code: 'AO', callingCode: '244' },
+  { name: 'Argentina', code: 'AR', callingCode: '54' },
+  { name: 'Australia', code: 'AU', callingCode: '61' },
+  { name: 'Austria', code: 'AT', callingCode: '43' },
+  { name: 'Bélgica', code: 'BE', callingCode: '32' },
+  { name: 'Bolivia', code: 'BO', callingCode: '591' },
+  { name: 'Brasil', code: 'BR', callingCode: '55' },
+  { name: 'Canadá', code: 'CA', callingCode: '1' },
+  { name: 'Chile', code: 'CL', callingCode: '56' },
+  { name: 'China', code: 'CN', callingCode: '86' },
+  { name: 'Colombia', code: 'CO', callingCode: '57' },
+  { name: 'Corea del Sur', code: 'KR', callingCode: '82' },
+  { name: 'Costa Rica', code: 'CR', callingCode: '506' },
+  { name: 'Cuba', code: 'CU', callingCode: '53' },
+  { name: 'Dinamarca', code: 'DK', callingCode: '45' },
+  { name: 'Ecuador', code: 'EC', callingCode: '593' },
+  { name: 'Egipto', code: 'EG', callingCode: '20' },
+  { name: 'España', code: 'ES', callingCode: '34' },
+  { name: 'Estados Unidos', code: 'US', callingCode: '1' },
+  { name: 'Finlandia', code: 'FI', callingCode: '358' },
+  { name: 'Francia', code: 'FR', callingCode: '33' },
+  { name: 'Grecia', code: 'GR', callingCode: '30' },
+  { name: 'Guatemala', code: 'GT', callingCode: '502' },
+  { name: 'Honduras', code: 'HN', callingCode: '504' },
+  { name: 'India', code: 'IN', callingCode: '91' },
+  { name: 'Indonesia', code: 'ID', callingCode: '62' },
+  { name: 'Irlanda', code: 'IE', callingCode: '353' },
+  { name: 'Israel', code: 'IL', callingCode: '972' },
+  { name: 'Italia', code: 'IT', callingCode: '39' },
+  { name: 'Japón', code: 'JP', callingCode: '81' },
+  { name: 'México', code: 'MX', callingCode: '52' },
+  { name: 'Nicaragua', code: 'NI', callingCode: '505' },
+  { name: 'Noruega', code: 'NO', callingCode: '47' },
+  { name: 'Países Bajos', code: 'NL', callingCode: '31' },
+  { name: 'Paraguay', code: 'PY', callingCode: '595' },
+  { name: 'Perú', code: 'PE', callingCode: '51' },
+  { name: 'Polonia', code: 'PL', callingCode: '48' },
+  { name: 'Portugal', code: 'PT', callingCode: '351' },
+  { name: 'Reino Unido', code: 'GB', callingCode: '44' },
+  { name: 'República Dominicana', code: 'DO', callingCode: '1' },
+  { name: 'Uruguay', code: 'UY', callingCode: '598' },
+  { name: 'Venezuela', code: 'VE', callingCode: '58' },
+];
+
+export default countries;
