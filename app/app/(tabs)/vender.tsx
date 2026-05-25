@@ -13,11 +13,24 @@ interface Solicitud {
   identificador: number;
   descripcion: string;
   estado: string;
+  estadoSubasta: string | null;
   fechaSolicitud: string;
   valorBase: number | null;
   comisionPropuesta: number | null;
   motivoRechazo: string | null;
   aceptadoPorUsuario: string | null;
+  depositoNombre: string | null;
+  depositoDireccion: string | null;
+  nroPoliza: string | null;
+  tipoPoliza: string | null;
+  importeSeguro: number | null;
+  puedeActualizarPoliza: boolean;
+  siguientePoliza?: {
+    nroPoliza: string;
+    tipoPoliza: string;
+    importeSeguro: number;
+    diferenciaSeguro: number;
+  } | null;
 }
 
 interface FotoSeleccionada {
@@ -81,6 +94,12 @@ export default function VenderScreen() {
     }
   };
 
+  const formatMoney = (value: number) => new Intl.NumberFormat('es-AR', {
+    style: 'currency',
+    currency: 'ARS',
+    maximumFractionDigits: 2,
+  }).format(value);
+
   const handleSubmit = async () => {
     if (!descripcion) { Alert.alert('Error', 'Ingrese una descripcion del bien'); return; }
     if (fotos.length < 6) { Alert.alert('Error', `Debe subir al menos 6 fotos (tiene ${fotos.length})`); return; }
@@ -133,6 +152,29 @@ export default function VenderScreen() {
     } catch (err: any) {
       Alert.alert('Error', err.response?.data?.error || 'Error');
     }
+  };
+
+  const handleUpgradePoliza = async (id: number, nextPoliza?: Solicitud['siguientePoliza']) => {
+    const diferencia = nextPoliza?.diferenciaSeguro ?? 0;
+    Alert.alert(
+      'Aumentar poliza',
+      `Se abonara la diferencia del premio: ${formatMoney(diferencia)}`,
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Pagar',
+          onPress: async () => {
+            try {
+              await api.post(`/venta/solicitudes/${id}/poliza/upgrade`);
+              Alert.alert('Listo', 'La poliza fue actualizada');
+              fetchSolicitudes();
+            } catch (err: any) {
+              Alert.alert('Error', err.response?.data?.error || 'Error al actualizar la poliza');
+            }
+          },
+        },
+      ],
+    );
   };
 
   const estadoColor = (estado: string) => {
@@ -296,6 +338,23 @@ export default function VenderScreen() {
                 {new Date(item.fechaSolicitud).toLocaleDateString('es-AR')}
               </Text>
 
+              {item.estadoSubasta && (
+                <Text style={styles.detailText}>Estado subasta: {item.estadoSubasta.toUpperCase()}</Text>
+              )}
+
+              {item.depositoNombre && (
+                <Text style={styles.detailText}>
+                  Deposito: {item.depositoNombre}{item.depositoDireccion ? ` - ${item.depositoDireccion}` : ''}
+                </Text>
+              )}
+
+              {item.nroPoliza && (
+                <Text style={styles.detailText}>
+                  Poliza: {item.nroPoliza}{item.tipoPoliza ? ` (${item.tipoPoliza})` : ''}
+                  {item.importeSeguro ? ` - ${formatMoney(item.importeSeguro)}` : ''}
+                </Text>
+              )}
+
               {item.estado === 'rechazada' && item.motivoRechazo && (
                 <Text style={styles.rechazoText}>Motivo: {item.motivoRechazo}</Text>
               )}
@@ -314,6 +373,21 @@ export default function VenderScreen() {
                     <Button title="Aceptar" size="sm" onPress={() => handleRespuesta(item.identificador, 'si')} style={{ flex: 1 }} />
                     <Button title="Rechazar" variant="danger" size="sm" onPress={() => handleRespuesta(item.identificador, 'no')} style={{ flex: 1 }} />
                   </View>
+                </View>
+              )}
+
+              {item.puedeActualizarPoliza && item.siguientePoliza && (
+                <View style={styles.upgradeSection}>
+                  <Text style={styles.upgradeText}>
+                    Puede aumentar la cobertura a {item.siguientePoliza.nroPoliza} pagando {formatMoney(item.siguientePoliza.diferenciaSeguro)}
+                  </Text>
+                  <Button
+                    title="Aumentar poliza"
+                    size="sm"
+                    variant="outline"
+                    onPress={() => handleUpgradePoliza(item.identificador, item.siguientePoliza)}
+                    style={{ marginTop: spacing.sm }}
+                  />
                 </View>
               )}
             </View>
@@ -357,8 +431,11 @@ const styles = StyleSheet.create({
   estadoDot: { width: 10, height: 10, borderRadius: 5, marginLeft: spacing.sm, marginTop: 4 },
   solicitudEstado: { fontFamily: fonts.bodyMedium, fontSize: fontSizes.xs, color: colors.textSecondary, marginTop: spacing.xs, letterSpacing: 0.5 },
   solicitudFecha: { fontFamily: fonts.body, fontSize: fontSizes.xs, color: colors.textMuted, marginTop: 2 },
+  detailText: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.textSecondary, marginTop: spacing.xs },
   rechazoText: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.alertEmber, marginTop: spacing.sm },
   ofertaSection: { marginTop: spacing.md, backgroundColor: colors.parchment, borderRadius: radius.sm, padding: spacing.md },
   ofertaText: { fontFamily: fonts.bodySemibold, fontSize: fontSizes.sm, color: colors.textPrimary },
   ofertaButtons: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.md },
+  upgradeSection: { marginTop: spacing.md, borderTopWidth: 1, borderTopColor: colors.border, paddingTop: spacing.md },
+  upgradeText: { fontFamily: fonts.bodySemibold, fontSize: fontSizes.sm, color: colors.textPrimary },
 });

@@ -5,6 +5,8 @@
 -- PHASE 1: Base schema (from EstructuraActual.sql)
 -- ============================================
 
+GO
+
 CREATE TABLE paises(
 	numero int not null,
 	nombre varchar(250) not null,
@@ -298,3 +300,91 @@ CREATE TABLE cuentasAVista (
 	CONSTRAINT fk_cuentasAVista_duenios FOREIGN KEY (duenio) REFERENCES duenios (identificador),
 	CONSTRAINT fk_cuentasAVista_paises FOREIGN KEY (pais) REFERENCES paises (numero)
 );
+
+GO
+
+IF COL_LENGTH('seguros', 'tipoPoliza') IS NULL
+	ALTER TABLE seguros ADD tipoPoliza VARCHAR(50) NULL;
+
+IF COL_LENGTH('seguros', 'valorBaseMin') IS NULL
+	ALTER TABLE seguros ADD valorBaseMin DECIMAL(18,2) NULL;
+
+IF COL_LENGTH('seguros', 'valorBaseMax') IS NULL
+	ALTER TABLE seguros ADD valorBaseMax DECIMAL(18,2) NULL;
+
+IF COL_LENGTH('seguros', 'depositoPreferido') IS NULL
+	ALTER TABLE seguros ADD depositoPreferido INT NULL;
+
+IF OBJECT_ID('fk_seguros_depositoPreferido', 'F') IS NULL
+	ALTER TABLE seguros ADD CONSTRAINT fk_seguros_depositoPreferido FOREIGN KEY (depositoPreferido) REFERENCES depositos (identificador);
+
+IF COL_LENGTH('solicitudesVenta', 'productoId') IS NULL
+	ALTER TABLE solicitudesVenta ADD productoId INT NULL;
+
+IF OBJECT_ID('fk_solicitudesVenta_productos', 'F') IS NULL
+	ALTER TABLE solicitudesVenta ADD CONSTRAINT fk_solicitudesVenta_productos FOREIGN KEY (productoId) REFERENCES productos (identificador);
+
+IF COL_LENGTH('productos', 'seguro') IS NULL
+	ALTER TABLE productos ADD seguro VARCHAR(30) NULL;
+
+IF COL_LENGTH('productos', 'deposito') IS NULL
+	ALTER TABLE productos ADD deposito INT NULL;
+
+GO
+
+UPDATE depositos
+SET nombre = 'Deposito Central', direccion = 'Av. Principal 100'
+WHERE identificador = 1;
+
+UPDATE depositos
+SET nombre = 'Deposito Norte', direccion = 'Calle Norte 50'
+WHERE identificador = 2;
+
+UPDATE depositos
+SET nombre = 'Deposito Sur', direccion = 'Ruta 5 Km 12'
+WHERE identificador = 3;
+
+IF NOT EXISTS (SELECT 1 FROM depositos WHERE nombre = 'Deposito Central')
+	INSERT INTO depositos (nombre, direccion) VALUES ('Deposito Central', 'Av. Principal 100');
+
+IF NOT EXISTS (SELECT 1 FROM depositos WHERE nombre = 'Deposito Norte')
+	INSERT INTO depositos (nombre, direccion) VALUES ('Deposito Norte', 'Calle Norte 50');
+
+IF NOT EXISTS (SELECT 1 FROM depositos WHERE nombre = 'Deposito Sur')
+	INSERT INTO depositos (nombre, direccion) VALUES ('Deposito Sur', 'Ruta 5 Km 12');
+
+UPDATE seguros
+SET compania = 'Cobertura Esencial', polizaCombinada = 'no', importe = 1000.00,
+	tipoPoliza = 'esencial', valorBaseMin = 0.01, valorBaseMax = 5000.00, depositoPreferido = 1
+WHERE nroPoliza = 'POL-1000';
+
+UPDATE seguros
+SET compania = 'Cobertura Estandar', polizaCombinada = 'no', importe = 5000.00,
+	tipoPoliza = 'estandar', valorBaseMin = 5000.01, valorBaseMax = 20000.00, depositoPreferido = 2
+WHERE nroPoliza = 'POL-5000';
+
+UPDATE seguros
+SET compania = 'Cobertura Extendida', polizaCombinada = 'no', importe = 10000.00,
+	tipoPoliza = 'extendida', valorBaseMin = 20000.01, valorBaseMax = 50000.00, depositoPreferido = 3
+WHERE nroPoliza = 'POL-10000';
+
+UPDATE seguros
+SET compania = 'Cobertura Premium', polizaCombinada = 'no', importe = 20000.00,
+	tipoPoliza = 'premium', valorBaseMin = 50000.01, valorBaseMax = NULL, depositoPreferido = 3
+WHERE nroPoliza = 'POL-20000';
+
+IF NOT EXISTS (SELECT 1 FROM seguros WHERE nroPoliza = 'POL-1000')
+	INSERT INTO seguros (nroPoliza, compania, polizaCombinada, importe, tipoPoliza, valorBaseMin, valorBaseMax, depositoPreferido)
+	VALUES ('POL-1000', 'Cobertura Esencial', 'no', 1000.00, 'esencial', 0.01, 5000.00, 1);
+
+IF NOT EXISTS (SELECT 1 FROM seguros WHERE nroPoliza = 'POL-5000')
+	INSERT INTO seguros (nroPoliza, compania, polizaCombinada, importe, tipoPoliza, valorBaseMin, valorBaseMax, depositoPreferido)
+	VALUES ('POL-5000', 'Cobertura Estandar', 'no', 5000.00, 'estandar', 5000.01, 20000.00, 2);
+
+IF NOT EXISTS (SELECT 1 FROM seguros WHERE nroPoliza = 'POL-10000')
+	INSERT INTO seguros (nroPoliza, compania, polizaCombinada, importe, tipoPoliza, valorBaseMin, valorBaseMax, depositoPreferido)
+	VALUES ('POL-10000', 'Cobertura Extendida', 'no', 10000.00, 'extendida', 20000.01, 50000.00, 3);
+
+IF NOT EXISTS (SELECT 1 FROM seguros WHERE nroPoliza = 'POL-20000')
+	INSERT INTO seguros (nroPoliza, compania, polizaCombinada, importe, tipoPoliza, valorBaseMin, valorBaseMax, depositoPreferido)
+	VALUES ('POL-20000', 'Cobertura Premium', 'no', 20000.00, 'premium', 50000.01, NULL, 3);

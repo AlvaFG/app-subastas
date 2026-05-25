@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { body } from 'express-validator';
 import {
-  createSolicitud, getSolicitudes, getSolicitudDetalle, responderSolicitud,
+  createSolicitud, getSolicitudes, getSolicitudDetalle, getEstadoSubastaSolicitud, responderSolicitud,
+  upgradePolizaSolicitud,
   getCuentasVista, createCuentaVista,
 } from '../controllers/ventaController';
 import { authGuard } from '../middleware/auth';
@@ -13,6 +14,7 @@ router.use(authGuard);
 // Solicitudes de venta
 router.get('/solicitudes', getSolicitudes);
 router.get('/solicitudes/:id', getSolicitudDetalle);
+router.get('/solicitudes/:id/estado-subasta', getEstadoSubastaSolicitud);
 
 router.post('/solicitudes',
   body('descripcion').notEmpty().withMessage('Descripcion requerida'),
@@ -33,6 +35,8 @@ router.put('/solicitudes/:id/respuesta',
   validate,
   responderSolicitud,
 );
+
+router.post('/solicitudes/:id/poliza/upgrade', upgradePolizaSolicitud);
 
 // Cuentas a la vista
 router.get('/cuentas', getCuentasVista);

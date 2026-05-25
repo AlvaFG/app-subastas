@@ -3,6 +3,12 @@ import sql from 'mssql';
 import { AuthRequest } from '../middleware/auth';
 import { connectDB } from '../models/db';
 import { resolveAuctionCategoryByPriceBase } from '../utils/category';
+import {
+  getInsurancePolicyUpgradeDifference,
+  getNextInsurancePolicyByCurrentNroPoliza,
+  resolveDepositByPriceBase,
+  resolveInsurancePolicyByPriceBase,
+} from '../utils/insurance';
 
 const AUTO_ACCEPT_DELAY_MS = 30_000;
 let schemaEnsurePromise: Promise<void> | null = null;
@@ -73,6 +79,12 @@ function normalizeHoraSubasta(horaSubasta?: string | Date): string {
   return '10:00:00';
 }
 
+function getParamAsString(param: string | string[] | undefined): string | null {
+  if (typeof param === 'string' && param.trim()) return param;
+  if (Array.isArray(param) && typeof param[0] === 'string' && param[0].trim()) return param[0];
+  return null;
+}
+
 function scheduleAutoAcceptSolicitud(solicitudId: number): void {
   setTimeout(async () => {
     try {
@@ -88,6 +100,58 @@ function scheduleAutoAcceptSolicitud(solicitudId: number): void {
       console.error('Error auto-aceptando solicitud:', error);
     }
   }, AUTO_ACCEPT_DELAY_MS);
+}
+
+function enrichSolicitudRow(row: any): any {
+  const nextPolicy = getNextInsurancePolicyByCurrentNroPoliza(row.nroPoliza);
+  const currentImporteSeguro = Number(row.importeSeguro || 0);
+
+  return {
+    ...row,
+    puedeActualizarPoliza: !!nextPolicy,
+    siguientePoliza: nextPolicy
+      ? {
+          nroPoliza: nextPolicy.nroPoliza,
+          tipoPoliza: nextPolicy.tipoPoliza,
+          importeSeguro: nextPolicy.importe,
+          diferenciaSeguro: getInsurancePolicyUpgradeDifference(currentImporteSeguro, nextPolicy.importe),
+        }
+      : null,
+  };
+}
+
+async function fetchSolicitudConCobertura(
+  pool: sql.ConnectionPool,
+  solicitudId: string,
+  clienteId: number,
+): Promise<any | null> {
+  const result = await pool.request()
+    .input('id', solicitudId)
+    .input('cliente', clienteId)
+    .query(`
+      SELECT s.identificador, s.descripcion, s.datosHistoricos, s.estado,
+             s.motivoRechazo, s.fechaSolicitud, s.valorBase, s.comisionPropuesta,
+             s.aceptadoPorUsuario, s.moneda, s.horaSubasta, s.esObraDisenador,
+             s.nombreArtistaDisenador, s.fechaObjeto, s.historiaObjeto, s.productoId,
+             sub.estado as estadoSubasta,
+             pr.deposito as depositoId, d.nombre as depositoNombre, d.direccion as depositoDireccion,
+             pr.seguro as nroPoliza, seg.compania as companiaSeguro, seg.tipoPoliza,
+             seg.importe as importeSeguro, seg.valorBaseMin, seg.valorBaseMax
+      FROM solicitudesVenta s
+      LEFT JOIN productos pr ON pr.identificador = s.productoId
+      LEFT JOIN itemsCatalogo ic ON ic.producto = pr.identificador
+      LEFT JOIN catalogos c ON c.identificador = ic.catalogo
+      LEFT JOIN subastas sub ON sub.identificador = c.subasta
+      LEFT JOIN depositos d ON d.identificador = pr.deposito
+      LEFT JOIN seguros seg ON seg.nroPoliza = pr.seguro
+      WHERE s.identificador = @id AND s.cliente = @cliente
+    `);
+
+  if (result.recordset.length === 0) {
+    return null;
+  }
+
+  return enrichSolicitudRow(result.recordset[0]);
 }
 
 // T502: POST /solicitudes-venta
@@ -181,16 +245,26 @@ export async function getSolicitudes(req: AuthRequest, res: Response): Promise<v
     const result = await pool.request()
       .input('cliente', req.user!.id)
       .query(`
-        SELECT identificador, descripcion, datosHistoricos, estado,
-               motivoRechazo, fechaSolicitud, valorBase, comisionPropuesta,
-               aceptadoPorUsuario, moneda, horaSubasta, esObraDisenador,
-               nombreArtistaDisenador, fechaObjeto, historiaObjeto
-        FROM solicitudesVenta
-        WHERE cliente = @cliente
-        ORDER BY fechaSolicitud DESC
+        SELECT s.identificador, s.descripcion, s.datosHistoricos, s.estado,
+               s.motivoRechazo, s.fechaSolicitud, s.valorBase, s.comisionPropuesta,
+               s.aceptadoPorUsuario, s.moneda, s.horaSubasta, s.esObraDisenador,
+               s.nombreArtistaDisenador, s.fechaObjeto, s.historiaObjeto, s.productoId,
+               sub.estado as estadoSubasta,
+               pr.deposito as depositoId, d.nombre as depositoNombre, d.direccion as depositoDireccion,
+               pr.seguro as nroPoliza, seg.compania as companiaSeguro, seg.tipoPoliza,
+               seg.importe as importeSeguro, seg.valorBaseMin, seg.valorBaseMax
+        FROM solicitudesVenta s
+        LEFT JOIN productos pr ON pr.identificador = s.productoId
+        LEFT JOIN itemsCatalogo ic ON ic.producto = pr.identificador
+        LEFT JOIN catalogos c ON c.identificador = ic.catalogo
+        LEFT JOIN subastas sub ON sub.identificador = c.subasta
+        LEFT JOIN depositos d ON d.identificador = pr.deposito
+        LEFT JOIN seguros seg ON seg.nroPoliza = pr.seguro
+        WHERE s.cliente = @cliente
+        ORDER BY s.fechaSolicitud DESC
       `);
 
-    res.json({ success: true, data: result.recordset });
+    res.json({ success: true, data: result.recordset.map(enrichSolicitudRow) });
   } catch (error) {
     console.error('Error getSolicitudes:', error);
     res.status(500).json({ success: false, error: 'Error interno del servidor' });
@@ -202,31 +276,128 @@ export async function getSolicitudDetalle(req: AuthRequest, res: Response): Prom
   try {
     await ensureVentaSchema();
 
-    const { id } = req.params;
+    const id = getParamAsString(req.params.id);
+    if (!id) {
+      res.status(400).json({ success: false, error: 'Id de solicitud invalido' });
+      return;
+    }
     const pool = await connectDB();
 
-    const result = await pool.request()
-      .input('id', id)
-      .input('cliente', req.user!.id)
-      .query(`
-        SELECT s.*,
-               d.nombre as depositoNombre, d.direccion as depositoDireccion,
-               seg.nroPoliza, seg.compania, seg.importe as importeSeguro
-        FROM solicitudesVenta s
-        LEFT JOIN productos pr ON pr.duenio = s.cliente
-        LEFT JOIN depositos d ON d.identificador = pr.deposito
-        LEFT JOIN seguros seg ON seg.nroPoliza = pr.seguro
-        WHERE s.identificador = @id AND s.cliente = @cliente
-      `);
+    const solicitud = await fetchSolicitudConCobertura(pool, id, req.user!.id);
 
-    if (result.recordset.length === 0) {
+    if (!solicitud) {
       res.status(404).json({ success: false, error: 'Solicitud no encontrada' });
       return;
     }
 
-    res.json({ success: true, data: result.recordset[0] });
+    res.json({ success: true, data: solicitud });
   } catch (error) {
     console.error('Error getSolicitudDetalle:', error);
+    res.status(500).json({ success: false, error: 'Error interno del servidor' });
+  }
+}
+
+// GET /solicitudes-venta/:id/estado-subasta
+export async function getEstadoSubastaSolicitud(req: AuthRequest, res: Response): Promise<void> {
+  try {
+    await ensureVentaSchema();
+
+    const id = getParamAsString(req.params.id);
+    if (!id) {
+      res.status(400).json({ success: false, error: 'Id de solicitud invalido' });
+      return;
+    }
+    const pool = await connectDB();
+    const solicitud = await fetchSolicitudConCobertura(pool, id, req.user!.id);
+
+    if (!solicitud) {
+      res.status(404).json({ success: false, error: 'Solicitud no encontrada' });
+      return;
+    }
+
+    res.json({
+      success: true,
+      data: {
+        identificador: solicitud.identificador,
+        estadoSubasta: solicitud.estadoSubasta || null,
+        deposito: solicitud.depositoNombre
+          ? {
+              identificador: solicitud.depositoId,
+              nombre: solicitud.depositoNombre,
+              direccion: solicitud.depositoDireccion,
+            }
+          : null,
+        poliza: solicitud.nroPoliza
+          ? {
+              nroPoliza: solicitud.nroPoliza,
+              compania: solicitud.companiaSeguro,
+              tipoPoliza: solicitud.tipoPoliza,
+              importeSeguro: solicitud.importeSeguro,
+              valorBaseMin: solicitud.valorBaseMin,
+              valorBaseMax: solicitud.valorBaseMax,
+            }
+          : null,
+        puedeActualizarPoliza: solicitud.puedeActualizarPoliza,
+        siguientePoliza: solicitud.siguientePoliza,
+      },
+    });
+  } catch (error) {
+    console.error('Error getEstadoSubastaSolicitud:', error);
+    res.status(500).json({ success: false, error: 'Error interno del servidor' });
+  }
+}
+
+// POST /solicitudes-venta/:id/poliza/upgrade
+export async function upgradePolizaSolicitud(req: AuthRequest, res: Response): Promise<void> {
+  try {
+    await ensureVentaSchema();
+
+    const id = getParamAsString(req.params.id);
+    if (!id) {
+      res.status(400).json({ success: false, error: 'Id de solicitud invalido' });
+      return;
+    }
+    const pool = await connectDB();
+
+    const solicitud = await fetchSolicitudConCobertura(pool, id, req.user!.id);
+
+    if (!solicitud || !solicitud.productoId) {
+      res.status(404).json({ success: false, error: 'Solicitud no encontrada o sin producto asociado' });
+      return;
+    }
+
+    const currentPolicyIndex = resolveInsurancePolicyByPriceBase(solicitud.valorBase || 0, solicitud.moneda).nroPoliza;
+    const currentPolicy = solicitud.nroPoliza || currentPolicyIndex;
+    const nextPolicy = getNextInsurancePolicyByCurrentNroPoliza(currentPolicy);
+
+    if (!nextPolicy) {
+      res.status(400).json({ success: false, error: 'La poliza ya se encuentra en su valor maximo' });
+      return;
+    }
+
+    const currentImporte = Number(solicitud.importeSeguro || 0);
+    const diferencia = getInsurancePolicyUpgradeDifference(currentImporte, nextPolicy.importe);
+
+    await pool.request()
+      .input('productoId', solicitud.productoId)
+      .input('seguro', nextPolicy.nroPoliza)
+      .query(`
+        UPDATE productos
+        SET seguro = @seguro
+        WHERE identificador = @productoId
+      `);
+
+    res.json({
+      success: true,
+      data: {
+        polizaAnterior: currentPolicy,
+        polizaNueva: nextPolicy,
+        diferenciaPremio: diferencia,
+        mensaje: `Poliza actualizada a ${nextPolicy.nroPoliza}. Diferencia a pagar: ${diferencia.toFixed(2)}`,
+      },
+    });
+  } catch (error) {
+    console.error('Error upgradePolizaSolicitud:', error);
     res.status(500).json({ success: false, error: 'Error interno del servidor' });
   }
 }
@@ -236,7 +407,11 @@ export async function responderSolicitud(req: AuthRequest, res: Response): Promi
   try {
     await ensureVentaSchema();
 
-    const { id } = req.params;
+    const id = getParamAsString(req.params.id);
+    if (!id) {
+      res.status(400).json({ success: false, error: 'Id de solicitud invalido' });
+      return;
+    }
     const { acepta } = req.body;
 
     const pool = await connectDB();
@@ -314,6 +489,30 @@ export async function responderSolicitud(req: AuthRequest, res: Response): Promi
 
       // Crear una subasta nueva por cada solicitud aceptada para que se refleje como nueva entrada.
       const precioBaseItem = solicitud.valorBase || 100.00;
+
+      const polizaAsignada = resolveInsurancePolicyByPriceBase(precioBaseItem, solicitud.moneda);
+      const depositoAsignado = resolveDepositByPriceBase(precioBaseItem, solicitud.moneda);
+
+      await pool.request()
+        .input('productoId', productoId)
+        .input('seguro', polizaAsignada.nroPoliza)
+        .input('deposito', depositoAsignado)
+        .query(`
+          UPDATE productos
+          SET seguro = @seguro,
+              deposito = @deposito
+          WHERE identificador = @productoId
+        `);
+
+      await pool.request()
+        .input('id', id)
+        .input('productoId', productoId)
+        .query(`
+          UPDATE solicitudesVenta
+          SET productoId = @productoId
+          WHERE identificador = @id
+        `);
+
       const fechaSubasta = new Date();
       fechaSubasta.setDate(fechaSubasta.getDate() + 11);
       const categoriaSubasta = resolveAuctionCategoryByPriceBase(precioBaseItem, solicitud.moneda);
