@@ -378,6 +378,47 @@ export async function upgradePolizaSolicitud(req: AuthRequest, res: Response): P
     const currentImporte = Number(solicitud.importeSeguro || 0);
     const diferencia = getInsurancePolicyUpgradeDifference(currentImporte, nextPolicy.importe);
 
+    // Determine currency to charge (use solicitud.moneda or default 'ARS')
+    const monedaSubasta = solicitud.moneda === 'USD' ? 'USD' : 'ARS';
+
+    // Try to find a verified, active payment method for the user in the auction currency with enough balance
+    const mediosRes = await pool.request()
+      .input('cliente', req.user!.id)
+      .input('moneda', monedaSubasta)
+      .query(`
+        SELECT identificador, montoDisponible, moneda, tipo
+        FROM mediosDePago
+        WHERE cliente = @cliente AND verificado = 'si' AND activo = 'si' AND moneda = @moneda
+        ORDER BY montoDisponible DESC
+      `);
+
+    const medios = mediosRes.recordset;
+    let medioElegido: any = null;
+    for (const m of medios) {
+      const disponible = Number(m.montoDisponible || 0);
+      if (disponible >= diferencia) { medioElegido = m; break; }
+    }
+
+    if (!medioElegido) {
+      res.status(400).json({ success: false, error: `No existe medio de pago en ${monedaSubasta} con saldo suficiente` });
+      return;
+    }
+
+    // Deduct the difference from the chosen payment method
+    const nuevoSaldo = Number(medioElegido.montoDisponible || 0) - diferencia;
+    if (nuevoSaldo < 0) {
+      res.status(400).json({ success: false, error: 'Saldo insuficiente en el medio seleccionado' });
+      return;
+    }
+
+    await pool.request()
+      .input('idMedio', medioElegido.identificador)
+      .input('nuevoMonto', nuevoSaldo)
+      .query(`
+        UPDATE mediosDePago SET montoDisponible = @nuevoMonto WHERE identificador = @idMedio
+      `);
+
+    // Apply new policy to product
     await pool.request()
       .input('productoId', solicitud.productoId)
       .input('seguro', nextPolicy.nroPoliza)
@@ -393,7 +434,8 @@ export async function upgradePolizaSolicitud(req: AuthRequest, res: Response): P
         polizaAnterior: currentPolicy,
         polizaNueva: nextPolicy,
         diferenciaPremio: diferencia,
-        mensaje: `Poliza actualizada a ${nextPolicy.nroPoliza}. Diferencia a pagar: ${diferencia.toFixed(2)}`,
+        medioUsado: { identificador: medioElegido.identificador, tipo: medioElegido.tipo, moneda: medioElegido.moneda },
+        mensaje: `Poliza actualizada a ${nextPolicy.nroPoliza}. Diferencia descontada de medio ${medioElegido.identificador}: ${diferencia.toFixed(2)} ${monedaSubasta}`,
       },
     });
   } catch (error) {

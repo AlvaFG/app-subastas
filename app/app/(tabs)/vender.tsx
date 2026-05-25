@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, Switch, Alert, FlatList, TouchableOpacity, Image,
+  View, Text, StyleSheet, ScrollView, Switch, Alert, FlatList, TouchableOpacity, Image, Modal,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { Button, Input, Badge } from '../../src/components';
@@ -59,6 +59,10 @@ export default function VenderScreen() {
   // List state
   const [solicitudes, setSolicitudes] = useState<Solicitud[]>([]);
   const [loadingList, setLoadingList] = useState(false);
+  const [medios, setMedios] = useState<any[]>([]);
+  const [modalMediosVisible, setModalMediosVisible] = useState(false);
+  const [selectedSolicitudForUpgrade, setSelectedSolicitudForUpgrade] = useState<number | null>(null);
+  const [mediosLoading, setMediosLoading] = useState(false);
 
   if (!isAuthenticated) {
     return (
@@ -97,6 +101,12 @@ export default function VenderScreen() {
   const formatMoney = (value: number) => new Intl.NumberFormat('es-AR', {
     style: 'currency',
     currency: 'ARS',
+    maximumFractionDigits: 2,
+  }).format(value);
+
+  const formatMoneyWithCurrency = (value: number, currency: string) => new Intl.NumberFormat('es-AR', {
+    style: 'currency',
+    currency: currency === 'USD' ? 'USD' : 'ARS',
     maximumFractionDigits: 2,
   }).format(value);
 
@@ -158,23 +168,41 @@ export default function VenderScreen() {
     const diferencia = nextPoliza?.diferenciaSeguro ?? 0;
     Alert.alert(
       'Aumentar poliza',
-      `Se abonara la diferencia del premio: ${formatMoney(diferencia)}`,
+      `Se abonara la diferencia del premio: ${formatMoneyWithCurrency(diferencia, 'ARS')}`,
       [
         { text: 'Cancelar', style: 'cancel' },
         {
-          text: 'Pagar',
+          text: 'Elegir medio',
           onPress: async () => {
             try {
-              await api.post(`/venta/solicitudes/${id}/poliza/upgrade`);
-              Alert.alert('Listo', 'La poliza fue actualizada');
-              fetchSolicitudes();
-            } catch (err: any) {
-              Alert.alert('Error', err.response?.data?.error || 'Error al actualizar la poliza');
+              // Abrir modal con medios de pago verificados y activos
+              setSelectedSolicitudForUpgrade(id);
+              setModalMediosVisible(true);
+              setMediosLoading(true);
+              const resp = await api.get('/medios-pago');
+              setMedios(resp.data.data || []);
+            } catch (err) {
+              Alert.alert('Error', 'No se pudieron obtener medios de pago');
+            } finally {
+              setMediosLoading(false);
             }
           },
         },
       ],
     );
+  };
+
+  const confirmUpgradeWithMedio = async (medioId: number) => {
+    if (!selectedSolicitudForUpgrade) return;
+    try {
+      await api.post(`/venta/solicitudes/${selectedSolicitudForUpgrade}/poliza/upgrade`, { medioDePagoId: medioId });
+      Alert.alert('Listo', 'La poliza fue actualizada');
+      setModalMediosVisible(false);
+      setSelectedSolicitudForUpgrade(null);
+      fetchSolicitudes();
+    } catch (err: any) {
+      Alert.alert('Error', err.response?.data?.error || 'Error al actualizar la poliza');
+    }
   };
 
   const estadoColor = (estado: string) => {
@@ -188,7 +216,8 @@ export default function VenderScreen() {
   };
 
   return (
-    <View style={styles.container}>
+    <>
+      <View style={styles.container}>
       <Text style={styles.title}>Vender un Articulo</Text>
 
       {/* Tabs */}
@@ -394,9 +423,70 @@ export default function VenderScreen() {
           )}
         />
       )}
-    </View>
+      </View>
+      <MediosModal
+        visible={modalMediosVisible}
+        onClose={() => { setModalMediosVisible(false); setSelectedSolicitudForUpgrade(null); }}
+        medios={medios}
+        loading={mediosLoading}
+        onSelect={confirmUpgradeWithMedio}
+      />
+    </>
   );
 }
+
+// Modal UI rendered outside main return to keep file organized
+const MediosModal: React.FC<any> = ({ visible, onClose, medios, loading, onSelect }) => (
+  <Modal visible={visible} animationType="slide" transparent>
+    <View style={modalStyles.overlay}>
+      <View style={modalStyles.container}>
+        <Text style={modalStyles.title}>Elegir medio de pago</Text>
+        {loading ? (
+          <Text>Cargando...</Text>
+        ) : medios.length === 0 ? (
+          <View style={{ alignItems: 'center' }}>
+            <Text style={{ marginBottom: 12 }}>No hay medios de pago verificados</Text>
+            <Button
+              title="Agregar medio de pago"
+              onPress={() => { onClose(); router.push('/medios-pago'); }}
+            />
+          </View>
+        ) : (
+          <FlatList
+            data={medios}
+            keyExtractor={(m) => String(m.identificador)}
+            renderItem={({ item }) => (
+              <TouchableOpacity
+                style={modalStyles.item}
+                onPress={() => { onSelect(item.identificador); onClose(); }}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessible
+                accessibilityRole="button"
+              >
+                <View>
+                  <Text style={modalStyles.itemTitle}>{item.descripcion || item.tipo || `Medio ${item.identificador}`}</Text>
+                  <Text style={modalStyles.itemSubtitle}>{Number(item.montoDisponible || 0).toLocaleString()} {item.moneda}</Text>
+                </View>
+                <Text style={modalStyles.choose}>Seleccionar</Text>
+              </TouchableOpacity>
+            )}
+          />
+        )}
+        <Button title="Cerrar" variant="outline" onPress={onClose} />
+      </View>
+    </View>
+  </Modal>
+);
+
+const modalStyles = StyleSheet.create({
+  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
+  container: { width: '90%', maxHeight: '80%', backgroundColor: 'white', borderRadius: 12, padding: 16 },
+  title: { fontSize: 18, fontWeight: '700', marginBottom: 12 },
+  item: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#eee' },
+  itemTitle: { fontWeight: '600' },
+  itemSubtitle: { color: '#666', marginTop: 4 },
+  choose: { color: '#007bff', fontWeight: '600' },
+});
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.ivory },
