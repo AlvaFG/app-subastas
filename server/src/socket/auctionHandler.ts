@@ -417,6 +417,26 @@ export function setupAuctionSocket(io: Server) {
           return;
         }
 
+        // Security: the owner of the product cannot place bids on their own item
+        const ownerRes = await pool.request()
+          .input('item', itemId)
+          .query(`
+            SELECT pr.duenio
+            FROM itemsCatalogo ic
+            INNER JOIN productos pr ON pr.identificador = ic.producto
+            WHERE ic.identificador = @item
+          `);
+
+        if (ownerRes.recordset.length > 0) {
+          const duenioIdRaw = ownerRes.recordset[0].duenio;
+          const duenioId = Number(duenioIdRaw);
+          if (!Number.isNaN(duenioId) && duenioId === Number(user.id)) {
+            console.warn(`Rejected bid: user ${user.id} is owner of item ${itemId}`);
+            callback({ success: false, error: 'El dueño del producto no puede ofertar en su propia subasta' });
+            return;
+          }
+        }
+
         // Get current best bid
         const bestBid = await pool.request()
           .input('item', itemId)

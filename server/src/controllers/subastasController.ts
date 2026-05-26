@@ -60,6 +60,24 @@ export async function placeBid(req: AuthRequest, res: Response): Promise<void> {
       return;
     }
 
+    // Security: the owner of the product cannot place bids on their own item
+    const ownerRes = await pool.request()
+      .input('item', itemId)
+      .query(`
+        SELECT pr.duenio
+        FROM itemsCatalogo ic
+        INNER JOIN productos pr ON pr.identificador = ic.producto
+        WHERE ic.identificador = @item
+      `);
+
+    if (ownerRes.recordset.length > 0) {
+      const duenioId = Number(ownerRes.recordset[0].duenio);
+      if (!Number.isNaN(duenioId) && duenioId === Number(user.id)) {
+        res.status(403).json({ success: false, error: 'El dueño del producto no puede ofertar en su propia subasta' });
+        return;
+      }
+    }
+
     // Get current best bid
     const bestBid = await pool.request()
       .input('item', itemId)
