@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, RefreshControl, Alert, Modal } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, RefreshControl } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, fonts, fontSizes, spacing, shadows, radius } from '../src/theme';
@@ -49,8 +49,6 @@ export default function NotificacionesScreen() {
   const [mediosPago, setMediosPago] = useState<MedioPago[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [payingId, setPayingId] = useState<number | null>(null);
-  const [selectingPaymentMethod, setSelectingPaymentMethod] = useState<number | null>(null);
 
   useEffect(() => {
     if (!isAuthenticated) {
@@ -106,33 +104,7 @@ export default function NotificacionesScreen() {
     }
   };
 
-  const pagarMulta = async (multaId: number, medioPagoId: number) => {
-    try {
-      setPayingId(multaId);
-      await api.put(`/multas/${multaId}/pagar`, { medioPagoId });
-      Alert.alert('Multa pagada', 'Ya puede volver a pujar en otra subasta.');
-      setSelectingPaymentMethod(null);
-      await Promise.all([fetchNotificaciones(), fetchMultas(), fetchMediosPago()]);
-    } catch (e: any) {
-      Alert.alert('Error', e?.response?.data?.error || 'No se pudo pagar la multa');
-    } finally {
-      setPayingId(null);
-    }
-  };
-
   const multasImpagas = multas.filter((multa) => multa.pagada === 'no');
-
-  const getMediosPagoConSaldoSuficiente = (multaId: number): MedioPago[] => {
-    const multa = multas.find((m) => m.identificador === multaId);
-    if (!multa) return [];
-    const importeMulta = Number(multa.importeMulta || 0);
-    const monedaMulta = multa.moneda || 'ARS';
-    return mediosPago.filter(
-      (medio) =>
-        Number(medio.montoDisponible || 0) >= importeMulta &&
-        (medio.moneda === monedaMulta || medio.internacional === 'si')
-    );
-  };
 
   const getTipoMedioPago = (tipo: string) => {
     switch (tipo) {
@@ -170,13 +142,10 @@ export default function NotificacionesScreen() {
           </Text>
           <TouchableOpacity
             style={styles.penaltyButton}
-            onPress={() => setSelectingPaymentMethod(multasImpagas[0].identificador)}
-            disabled={payingId === multasImpagas[0].identificador}
+            onPress={() => router.push(`/multas/${multasImpagas[0].identificador}/pagar`)}
           >
             <Text style={styles.penaltyButtonText}>
-              {payingId === multasImpagas[0].identificador
-                ? 'Procesando...'
-                : `Pagar multa ${multasImpagas[0].moneda === 'USD' ? 'US$' : '$'}${Number(multasImpagas[0].importeMulta || 0).toFixed(2)}`}
+              {`Pagar multa ${multasImpagas[0].moneda === 'USD' ? 'US$' : '$'}${Number(multasImpagas[0].importeMulta || 0).toFixed(2)}`}
             </Text>
           </TouchableOpacity>
         </View>
@@ -212,82 +181,6 @@ export default function NotificacionesScreen() {
         )}
       />
 
-      {/* Modal para seleccionar método de pago */}
-      {selectingPaymentMethod !== null && (
-        <Modal
-          transparent
-          animationType="fade"
-          visible={true}
-          onRequestClose={() => setSelectingPaymentMethod(null)}
-        >
-          <View style={styles.modalOverlay}>
-            <View style={[styles.modalContent, shadows.lg]}>
-              <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>Seleccionar método de pago</Text>
-                <TouchableOpacity onPress={() => setSelectingPaymentMethod(null)}>
-                  <Ionicons name="close" size={24} color={colors.textPrimary} />
-                </TouchableOpacity>
-              </View>
-
-              <Text style={styles.modalLabel}>
-                Multa: {(() => {
-                  const m = multas.find((mm) => mm.identificador === selectingPaymentMethod);
-                  const moneda = m?.moneda === 'USD' ? 'US$' : '$';
-                  return `${moneda}${Number(m?.importeMulta || 0).toFixed(2)}`;
-                })()}
-              </Text>
-
-              {getMediosPagoConSaldoSuficiente(selectingPaymentMethod).length === 0 ? (
-                <View style={styles.noMethodsContainer}>
-                  <Ionicons name="alert-circle-outline" size={48} color={colors.alertEmber} />
-                  <Text style={styles.noMethodsText}>No tienes medios de pago con saldo suficiente</Text>
-                </View>
-              ) : (
-                <FlatList
-                  data={getMediosPagoConSaldoSuficiente(selectingPaymentMethod)}
-                  keyExtractor={(item) => String(item.identificador)}
-                  scrollEnabled={false}
-                  renderItem={({ item }) => (
-                    <TouchableOpacity
-                      style={[styles.methodItem, shadows.sm]}
-                      onPress={() => pagarMulta(selectingPaymentMethod, item.identificador)}
-                      disabled={payingId !== null}
-                    >
-                      <View style={styles.methodInfo}>
-                        <Text style={styles.methodType}>{getTipoMedioPago(item.tipo)}</Text>
-                        <Text style={styles.methodDesc}>{item.descripcion}</Text>
-                        <Text style={styles.methodExtra}>
-                          {item.moneda === 'USD' ? 'US$' : '$'} {item.internacional === 'si' ? '• Internacional' : '• Local'}
-                        </Text>
-                        {item.ultimosDigitos && (
-                          <Text style={styles.methodExtra}>•••• {item.ultimosDigitos}</Text>
-                        )}
-                      </View>
-                      <View style={styles.methodBalance}>
-                        <Text style={styles.balanceLabel}>
-                          {item.moneda === 'USD' ? 'US$' : '$'} {Number(item.montoDisponible || 0).toFixed(2)}
-                        </Text>
-                        {payingId === selectingPaymentMethod ? (
-                          <ActivityIndicator size="small" color={colors.auctionGold} />
-                        ) : (
-                          <Ionicons name="chevron-forward" size={20} color={colors.textSecondary} />
-                        )}
-                      </View>
-                    </TouchableOpacity>
-                  )}
-                />
-              )}
-
-              <TouchableOpacity
-                style={styles.modalCancelButton}
-                onPress={() => setSelectingPaymentMethod(null)}
-              >
-                <Text style={styles.modalCancelText}>Cancelar</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </Modal>
-      )}
     </View>
   );
 }

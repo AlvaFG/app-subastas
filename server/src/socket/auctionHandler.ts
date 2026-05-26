@@ -185,6 +185,22 @@ async function finalizeItemForPayment(io: Server, subastaId: number, itemId: num
   return { success: true };
 }
 
+async function getCurrentBestBid(pool: any, itemId: number) {
+  const bestBid = await pool.request()
+    .input('item', itemId)
+    .query(`
+      SELECT TOP 1 p.identificador as bidId, p.importe, pe.nombre as postorNombre, a.cliente as postorId
+      FROM pujos p
+      INNER JOIN asistentes a ON a.identificador = p.asistente
+      INNER JOIN clientes c ON c.identificador = a.cliente
+      INNER JOIN personas pe ON pe.identificador = c.identificador
+      WHERE p.item = @item
+      ORDER BY p.importe DESC, p.identificador DESC
+    `);
+
+  return bestBid.recordset[0] || null;
+}
+
 async function closeAuction(io: Server, subastaId: number) {
   const pool = await connectDB();
 
@@ -779,6 +795,81 @@ export function setupAuctionSocket(io: Server) {
       } catch (error) {
         console.error('Error confirm-payment:', error);
         callback({ success: false, error: 'No se pudo confirmar el pago' });
+      }
+    });
+
+    // Winner cancels payment: remove winning bid and reopen item with previous best bid.
+    socket.on('cancel-payment', async (data: { itemId: number }, callback: Function) => {
+      try {
+        const pending = pendingPayments.get(data.itemId);
+        if (!pending) {
+          callback({ success: false, error: 'No hay pago pendiente para este item' });
+          return;
+        }
+
+        if (pending.clienteId !== user.id) {
+          callback({ success: false, error: 'Solo el ganador puede cancelar el pago' });
+          return;
+        }
+
+        const pool = await connectDB();
+
+        await pool.request()
+          .input('pujoId', pending.pujoId)
+          .query('DELETE FROM pujos WHERE identificador = @pujoId');
+
+        pendingPayments.delete(data.itemId);
+
+        const reopenedBid = await getCurrentBestBid(pool, pending.itemId);
+        const reopenedState = reopenedBid
+          ? {
+              itemId: pending.itemId,
+              bestBid: Number(reopenedBid.importe || 0),
+              bestBidder: reopenedBid.postorNombre,
+              bestBidderId: reopenedBid.postorId,
+              bidId: reopenedBid.bidId,
+            }
+          : {
+              itemId: pending.itemId,
+              bestBid: pending.importe,
+              bestBidder: '',
+              bestBidderId: null,
+              bidId: null,
+            };
+
+        // Resume the bid timer so the auction can continue from the previous offer.
+        const existingTimer = itemCloseTimers.get(pending.itemId);
+        if (existingTimer) {
+          clearTimeout(existingTimer);
+          itemCloseTimers.delete(pending.itemId);
+        }
+
+        const timer = setTimeout(async () => {
+          try {
+            await finalizeItemForPayment(io, pending.subastaId, pending.itemId);
+          } catch (err) {
+            console.error('Error re-closing item after payment cancel:', err);
+          } finally {
+            itemCloseTimers.delete(pending.itemId);
+          }
+        }, LAST_BID_CLOSE_MS);
+        itemCloseTimers.set(pending.itemId, timer);
+
+        activeItems.set(pending.subastaId, pending.itemId);
+
+        io.to(`auction-${pending.subastaId}`).emit('item-payment-cancelled', {
+          ...reopenedState,
+          closeInMs: LAST_BID_CLOSE_MS,
+        });
+        io.to(`auction-${pending.subastaId}`).emit('item-close-scheduled', {
+          itemId: pending.itemId,
+          closeInMs: LAST_BID_CLOSE_MS,
+        });
+
+        callback({ success: true, data: reopenedState });
+      } catch (error) {
+        console.error('Error cancel-payment:', error);
+        callback({ success: false, error: 'No se pudo cancelar el pago' });
       }
     });
 

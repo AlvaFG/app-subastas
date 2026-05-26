@@ -57,6 +57,7 @@ export default function LiveAuctionScreen() {
   const [selectedMedioPagoId, setSelectedMedioPagoId] = useState<number | null>(null);
   const [closingInMs, setClosingInMs] = useState<number | null>(null);
   const [currentCategory, setCurrentCategory] = useState<string>('comun');
+  const [cancellingPayment, setCancellingPayment] = useState(false);
 
   // Animation for price pulse
   const priceScale = useSharedValue(1);
@@ -150,6 +151,17 @@ export default function LiveAuctionScreen() {
           setWonItem(data);
           setSelectedMedioPagoId(data?.medios?.[0]?.identificador || null);
           setShowPaymentModal(true);
+        });
+
+        socket.on('item-payment-cancelled', (data: any) => {
+          if (!mounted) return;
+          setShowPaymentModal(false);
+          setWonItem(null);
+          setSelectedMedioPagoId(null);
+          setBids((prev) => prev.filter((bid) => bid.bidId !== data.bidId));
+          setBestBid(Number(data.bestBid || currentItem?.precioBase || 0));
+          setBestBidder(data.bestBidder || '');
+          setClosingInMs(data.closeInMs ?? null);
         });
 
         socket.on('auction-closed', () => {
@@ -261,6 +273,48 @@ export default function LiveAuctionScreen() {
     });
   };
 
+  const performCancelPayment = () => {
+    if (!wonItem?.itemId) {
+      setShowPaymentModal(false);
+      return;
+    }
+    const socket = getSocket();
+    if (!socket) {
+      setShowPaymentModal(false);
+      return;
+    }
+
+    setCancellingPayment(true);
+    socket.emit('cancel-payment', { itemId: wonItem.itemId }, (response: any) => {
+      setCancellingPayment(false);
+      if (response?.success) {
+        setShowPaymentModal(false);
+        setWonItem(null);
+        setSelectedMedioPagoId(null);
+        setBestBid(Number(response.data?.bestBid || currentItem?.precioBase || 0));
+        setBestBidder(response.data?.bestBidder || '');
+      } else {
+        Alert.alert('Error', response?.error || 'No se pudo cancelar el pago');
+      }
+    });
+  };
+
+  const cancelPayment = () => {
+    if (!wonItem?.itemId) {
+      setShowPaymentModal(false);
+      return;
+    }
+
+    Alert.alert(
+      'Cancelar compra',
+      'Estas seguro que desea cancelar la compra y volver a la ultima oferta?',
+      [
+        { text: 'Seguir pagando', style: 'cancel' },
+        { text: 'Cancelar compra', style: 'destructive', onPress: performCancelPayment },
+      ],
+    );
+  };
+
   const renderBid = ({ item }: { item: Bid }) => (
     <View style={styles.bidRow}>
       <Text style={styles.bidName}>{item.postorNombre}</Text>
@@ -345,7 +399,7 @@ export default function LiveAuctionScreen() {
       {/* T408: Payment modal after winning */}
       <Modal
         visible={showPaymentModal}
-        onClose={() => setShowPaymentModal(false)}
+        onClose={cancelPayment}
         title="Felicitaciones!"
         variant="bottom"
       >
@@ -384,6 +438,7 @@ export default function LiveAuctionScreen() {
               title="Confirmar Pago"
               onPress={confirmPayment}
               size="lg"
+              disabled={cancellingPayment}
               style={{ marginTop: spacing.md }}
             />
           </>
