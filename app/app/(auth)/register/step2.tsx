@@ -5,6 +5,8 @@ import { Button, Input } from '../../../src/components';
 import { colors, fonts, fontSizes, spacing } from '../../../src/theme';
 import { useAuthStore } from '../../../src/store/authStore';
 
+const MIN_PASSWORD_LENGTH = 8;
+
 export default function RegisterStep2Screen() {
   const { identificador: identificadorParam } = useLocalSearchParams<{ identificador?: string }>();
   const [identificador, setIdentificador] = useState(identificadorParam || '');
@@ -21,8 +23,8 @@ export default function RegisterStep2Screen() {
       setError('Complete todos los campos');
       return;
     }
-    if (clave.length < 6) {
-      setError('La clave debe tener al menos 6 caracteres');
+    if (clave.length < MIN_PASSWORD_LENGTH) {
+      setError(`La clave debe tener al menos ${MIN_PASSWORD_LENGTH} caracteres`);
       return;
     }
     if (clave !== confirmarClave) {
@@ -74,7 +76,7 @@ export default function RegisterStep2Screen() {
       <Input
         label="Clave"
         leftIcon="lock-closed-outline"
-        placeholder="Minimo 6 caracteres"
+        placeholder={`Minimo ${MIN_PASSWORD_LENGTH} caracteres`}
         value={clave}
         onChangeText={setClave}
         isPassword
