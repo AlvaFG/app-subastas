@@ -58,6 +58,8 @@ export default function LiveAuctionScreen() {
   const [closingInMs, setClosingInMs] = useState<number | null>(null);
   const [currentCategory, setCurrentCategory] = useState<string>('comun');
   const [cancellingPayment, setCancellingPayment] = useState(false);
+  const [minBid, setMinBid] = useState<number | null>(null);
+  const [maxBid, setMaxBid] = useState<number | null>(null);
 
   // Animation for price pulse
   const priceScale = useSharedValue(1);
@@ -199,6 +201,21 @@ export default function LiveAuctionScreen() {
     }, 1000);
     return () => clearInterval(timer);
   }, [closingInMs]);
+
+  // Recalculate min/max bids whenever bestBid, item or category change
+  useEffect(() => {
+    if (!currentItem) {
+      setMinBid(null);
+      setMaxBid(null);
+      return;
+    }
+    const base = Number(currentItem.precioBase || 0);
+    const isHighCategory = currentCategory === 'oro' || currentCategory === 'platino';
+    const min = Number((bestBid || 0) + (base * 0.01));
+    const max = isHighCategory ? null : Number((bestBid || 0) + (base * 0.20));
+    setMinBid(min);
+    setMaxBid(max);
+  }, [bestBid, currentItem, currentCategory]);
 
   const formatPrice = (price: number) =>
     `${moneda === 'USD' ? 'US$' : '$'} ${price.toLocaleString('es-AR', { minimumFractionDigits: 2 })}`;
@@ -349,6 +366,12 @@ export default function LiveAuctionScreen() {
             <Text style={styles.currentPrice}>{formatPrice(bestBid)}</Text>
             {bestBidder && <Text style={styles.bidderName}>{bestBidder}</Text>}
             {closingInMs != null && <Text style={styles.countdown}>Cierre en: {Math.ceil(closingInMs / 1000)}s</Text>}
+            {currentItem && (
+              <View style={styles.minMaxContainer}>
+                <Text style={styles.minMaxLabel}>Puja mínima: {formatPrice(minBid ?? 0)}</Text>
+                <Text style={styles.minMaxLabel}>Puja máxima: {maxBid != null ? formatPrice(maxBid) : 'Sin tope'}</Text>
+              </View>
+            )}
           </Animated.View>
         </View>
       ) : (
@@ -466,6 +489,9 @@ const styles = StyleSheet.create({
   currentPrice: { fontFamily: fonts.display, fontSize: fontSizes.hero, color: colors.auctionGold, marginTop: spacing.xs },
   bidderName: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.steelBlue, marginTop: spacing.xs },
   countdown: { fontFamily: fonts.bodySemibold, fontSize: fontSizes.sm, color: colors.alertEmber, marginTop: spacing.xs },
+
+  minMaxContainer: { flexDirection: 'column', alignItems: 'center', marginTop: spacing.sm },
+  minMaxLabel: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.textMuted, marginTop: spacing.xs, textAlign: 'center' },
 
   waiting: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   waitingText: { fontFamily: fonts.body, fontSize: fontSizes.lg, color: colors.textMuted },
