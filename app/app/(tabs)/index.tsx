@@ -121,7 +121,7 @@ export default function SubastasScreen() {
 
         <View style={styles.cardFooter}>
           <Text style={styles.footerText}>
-            {item.totalItems} items | {item.moneda || 'ARS'}
+            {item.totalItems} {item.totalItems === 1 ? 'pieza' : 'piezas'} | {item.moneda || 'ARS'}
           </Text>
         </View>
       </View>

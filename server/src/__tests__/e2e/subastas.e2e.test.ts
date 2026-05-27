@@ -113,12 +113,14 @@ describe('Subastas E2E', () => {
 
     it('should return catalogo without prices when unauthenticated', async () => {
       mockQuery.mockResolvedValueOnce({ recordset: catalogoItems });
+      mockQuery.mockResolvedValueOnce({ recordset: [{ totalPiezas: 1 }] });
 
       const res = await request(app).get('/api/subastas/1/catalogo');
 
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.data).toHaveLength(1);
+      expect(res.body.totalPiezas).toBe(1);
     });
 
     it('should return catalogo with prices when authenticated with sufficient category', async () => {
@@ -128,6 +130,7 @@ describe('Subastas E2E', () => {
       mockQuery.mockResolvedValueOnce({ recordset: [{ categoria: 'comun' }] });
       // Catalogo items
       mockQuery.mockResolvedValueOnce({ recordset: catalogoItems });
+      mockQuery.mockResolvedValueOnce({ recordset: [{ totalPiezas: 1 }] });
 
       const res = await request(app)
         .get('/api/subastas/1/catalogo')

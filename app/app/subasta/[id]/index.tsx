@@ -26,6 +26,7 @@ export default function CatalogoScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
   const [items, setItems] = useState<CatalogoItem[]>([]);
+  const [totalPiezas, setTotalPiezas] = useState<number>(0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -33,6 +34,7 @@ export default function CatalogoScreen() {
     try {
       const { data } = await api.get(`/subastas/${id}/catalogo`);
       setItems(data.data);
+      setTotalPiezas(data.totalPiezas ?? data.data.length);
     } catch {
       // handle error
     } finally {
@@ -83,8 +85,8 @@ export default function CatalogoScreen() {
                 onPress={() => router.push(`/subasta/${id}/live`)}
                 style={styles.liveBtn}
               />
-              {items.length > 0 ? (
-                <Text style={styles.count}>{items.length} piezas</Text>
+              {totalPiezas > 0 ? (
+                <Text style={styles.count}>{totalPiezas} {totalPiezas === 1 ? 'pieza' : 'piezas'}</Text>
               ) : null}
             </View>
           }

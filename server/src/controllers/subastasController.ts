@@ -198,7 +198,15 @@ export async function getSubastas(req: Request, res: Response): Promise<void> {
       SELECT s.identificador, s.fecha, s.hora, s.estado, s.ubicacion,
              s.categoria, s.moneda, s.capacidadAsistentes,
              p.nombre as subastadorNombre,
-             (SELECT COUNT(*) FROM catalogos c WHERE c.subasta = s.identificador) as totalItems,
+             (SELECT COALESCE(SUM(CASE WHEN paCount.cantidad > 0 THEN paCount.cantidad ELSE 1 END), 0)
+              FROM itemsCatalogo ic
+              INNER JOIN catalogos c ON c.identificador = ic.catalogo
+              OUTER APPLY (
+                SELECT COUNT(*) as cantidad
+                FROM productoArticulos pa
+                WHERE pa.producto = ic.producto
+              ) paCount
+              WHERE c.subasta = s.identificador) as totalItems,
              (SELECT TOP 1 pr.descripcionCatalogo FROM itemsCatalogo ic
               INNER JOIN productos pr ON pr.identificador = ic.producto
               INNER JOIN catalogos c ON c.identificador = ic.catalogo
@@ -295,6 +303,20 @@ export async function getCatalogo(req: AuthRequest, res: Response): Promise<void
         ORDER BY ic.identificador
       `);
 
+    const totalPiezasResult = await pool.request()
+      .input('subastaId', id)
+      .query(`
+        SELECT COALESCE(SUM(CASE WHEN paCount.cantidad > 0 THEN paCount.cantidad ELSE 1 END), 0) as totalPiezas
+        FROM itemsCatalogo ic
+        INNER JOIN catalogos c ON c.identificador = ic.catalogo
+        OUTER APPLY (
+          SELECT COUNT(*) as cantidad
+          FROM productoArticulos pa
+          WHERE pa.producto = ic.producto
+        ) paCount
+        WHERE c.subasta = @subastaId
+      `);
+
     const items = result.recordset;
 
     const productoIds = items
@@ -326,7 +348,9 @@ export async function getCatalogo(req: AuthRequest, res: Response): Promise<void
       fotoData: fotoMap.get(item.productoId) || null,
     }));
 
-    res.json({ success: true, data: withFotos });
+    const totalPiezas = totalPiezasResult.recordset[0]?.totalPiezas || withFotos.length;
+
+    res.json({ success: true, data: withFotos, totalPiezas });
   } catch (error) {
     console.error('Error getCatalogo:', error);
     res.status(500).json({ success: false, error: 'Error interno del servidor' });
