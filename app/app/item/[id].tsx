@@ -30,6 +30,12 @@ interface ItemDetalle {
   fechaObjeto?: string;
   historiaObjeto?: string;
   fotos: string[];
+  articulos?: {
+    identificador: number;
+    orden: number;
+    descripcion: string;
+    fotos: string[];
+  }[];
 }
 
 export default function ItemDetalleScreen() {
@@ -127,6 +133,25 @@ export default function ItemDetalleScreen() {
           <Text style={styles.description}>{item.descripcionCompleta}</Text>
         </View>
 
+        {item.articulos && item.articulos.length > 0 && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>Articulos del lote</Text>
+            {item.articulos.map((articulo) => (
+              <View key={articulo.identificador} style={styles.articleCard}>
+                <Text style={styles.articleTitle}>Articulo {articulo.orden}</Text>
+                <Text style={styles.articleDescription}>{articulo.descripcion}</Text>
+                {articulo.fotos.length > 0 && (
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.articlePhotos}>
+                    {articulo.fotos.map((foto, index) => (
+                      <Image key={`${articulo.identificador}-${index}`} source={{ uri: foto }} style={styles.articleImage} resizeMode="cover" />
+                    ))}
+                  </ScrollView>
+                )}
+              </View>
+            ))}
+          </View>
+        )}
+
         {item.esObraDisenador === 'si' && (
           <View style={styles.section}>
             <Text style={styles.sectionTitle}>Obra / Diseniador</Text>
@@ -183,6 +208,11 @@ const styles = StyleSheet.create({
   section: { marginTop: spacing.xl },
   sectionTitle: { fontFamily: fonts.headingSemibold, fontSize: fontSizes.lg, color: colors.textPrimary, marginBottom: spacing.sm },
   description: { fontFamily: fonts.body, fontSize: fontSizes.base, color: colors.textSecondary, lineHeight: 25.6 },
+  articleCard: { backgroundColor: colors.parchment, borderRadius: radius.md, padding: spacing.md, marginTop: spacing.sm },
+  articleTitle: { fontFamily: fonts.headingSemibold, fontSize: fontSizes.base, color: colors.textPrimary },
+  articleDescription: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.textSecondary, marginTop: spacing.xs, lineHeight: 22 },
+  articlePhotos: { marginTop: spacing.sm },
+  articleImage: { width: 140, height: 140, borderRadius: radius.md, marginRight: spacing.sm },
   detailRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: spacing.sm, borderBottomWidth: 1, borderBottomColor: colors.border },
   detailLabel: { fontFamily: fonts.bodyMedium, fontSize: fontSizes.sm, color: colors.textSecondary },
   detailValue: { fontFamily: fonts.bodySemibold, fontSize: fontSizes.sm, color: colors.textPrimary },

@@ -38,6 +38,12 @@ interface FotoSeleccionada {
   base64: string;
 }
 
+interface ArticuloSolicitud {
+  id: string;
+  descripcion: string;
+  fotos: FotoSeleccionada[];
+}
+
 export default function VenderScreen() {
   const { isAuthenticated } = useAuthStore();
   const [tab, setTab] = useState<'nueva' | 'mis'>('nueva');
@@ -53,7 +59,9 @@ export default function VenderScreen() {
   const [fechaObjeto, setFechaObjeto] = useState('');
   const [historiaObjeto, setHistoriaObjeto] = useState('');
   const [declaracion, setDeclaracion] = useState(false);
-  const [fotos, setFotos] = useState<FotoSeleccionada[]>([]);
+  const [articulos, setArticulos] = useState<ArticuloSolicitud[]>([
+    { id: 'articulo-1', descripcion: '', fotos: [] },
+  ]);
   const [loading, setLoading] = useState(false);
 
   // List state
@@ -83,18 +91,41 @@ export default function VenderScreen() {
     finally { setLoadingList(false); }
   };
 
-  const pickPhotos = async () => {
+  const addArticulo = () => {
+    setArticulos((prev) => [
+      ...prev,
+      { id: `articulo-${Date.now()}-${prev.length + 1}`, descripcion: '', fotos: [] },
+    ]);
+  };
+
+  const updateArticulo = (articuloId: string, changes: Partial<ArticuloSolicitud>) => {
+    setArticulos((prev) => prev.map((articulo) => (
+      articulo.id === articuloId ? { ...articulo, ...changes } : articulo
+    )));
+  };
+
+  const removeArticulo = (articuloId: string) => {
+    setArticulos((prev) => (prev.length > 1 ? prev.filter((articulo) => articulo.id !== articuloId) : prev));
+  };
+
+  const pickArticuloPhotos = async (articuloId: string) => {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
       allowsMultipleSelection: true,
       base64: true,
       quality: 0.45,
     });
+
     if (!result.canceled) {
       const newPhotos = result.assets
-        .filter((a) => !!a.base64)
-        .map((a) => ({ uri: a.uri, base64: a.base64! }));
-      setFotos((prev) => [...prev, ...newPhotos].slice(0, 12));
+        .filter((asset) => !!asset.base64)
+        .map((asset) => ({ uri: asset.uri, base64: asset.base64! }));
+
+      setArticulos((prev) => prev.map((articulo) => (
+        articulo.id === articuloId
+          ? { ...articulo, fotos: [...articulo.fotos, ...newPhotos].slice(0, 12) }
+          : articulo
+      )));
     }
   };
 
@@ -112,7 +143,11 @@ export default function VenderScreen() {
 
   const handleSubmit = async () => {
     if (!descripcion) { Alert.alert('Error', 'Ingrese una descripcion del bien'); return; }
-    if (fotos.length < 6) { Alert.alert('Error', `Debe subir al menos 6 fotos (tiene ${fotos.length})`); return; }
+    if (articulos.length === 0) { Alert.alert('Error', 'Agregue al menos un articulo'); return; }
+    if (articulos.some((articulo) => !articulo.descripcion.trim())) { Alert.alert('Error', 'Cada articulo debe tener descripcion'); return; }
+    if (articulos.some((articulo) => articulo.fotos.length === 0)) { Alert.alert('Error', 'Cada articulo debe tener al menos una foto'); return; }
+    const totalFotos = articulos.reduce((acumulado, articulo) => acumulado + articulo.fotos.length, 0);
+    if (totalFotos < 6) { Alert.alert('Error', `Debe subir al menos 6 fotos en total (tiene ${totalFotos})`); return; }
     if (!precioBase) { Alert.alert('Error', 'Ingrese un precio base'); return; }
     if (!/^\d{2}:\d{2}$/.test(horaSubasta)) { Alert.alert('Error', 'Ingrese una hora valida (HH:mm)'); return; }
     if (esObraDisenador && !nombreArtistaDisenador.trim()) { Alert.alert('Error', 'Ingrese nombre de artista/diseniador'); return; }
@@ -130,7 +165,10 @@ export default function VenderScreen() {
         nombreArtistaDisenador: esObraDisenador ? nombreArtistaDisenador : null,
         fechaObjeto: esObraDisenador ? (fechaObjeto || null) : null,
         historiaObjeto: esObraDisenador ? (historiaObjeto || null) : null,
-        fotos: fotos.map((f) => f.base64),
+        articulos: articulos.map((articulo) => ({
+          descripcion: articulo.descripcion.trim(),
+          fotos: articulo.fotos.map((foto) => foto.base64),
+        })),
         declaracionPropiedad: 'si',
       });
       Alert.alert('Solicitud enviada', 'La solicitud se aceptara automaticamente en 30 segundos.');
@@ -144,7 +182,7 @@ export default function VenderScreen() {
       setFechaObjeto('');
       setHistoriaObjeto('');
       setDeclaracion(false);
-      setFotos([]);
+      setArticulos([{ id: 'articulo-1', descripcion: '', fotos: [] }]);
       setTab('mis');
       fetchSolicitudes();
     } catch (err: any) {
@@ -317,21 +355,45 @@ export default function VenderScreen() {
             </>
           )}
 
-          {/* Photos */}
-          <Text style={styles.sectionTitle}>Fotos (minimo 6)</Text>
-          <View style={styles.photoInfo}>
-            <Text style={styles.photoCount}>{fotos.length} / 6 minimo</Text>
-            <Button title="Agregar Fotos" variant="outline" size="sm" onPress={pickPhotos} />
+          {/* Articulos */}
+          <View style={styles.sectionHeaderRow}>
+            <Text style={styles.sectionTitle}>Articulos del lote</Text>
+            <Button title="Agregar articulo" variant="outline" size="sm" onPress={addArticulo} />
           </View>
-          {fotos.length > 0 && (
-            <ScrollView horizontal style={styles.photoStrip}>
-              {fotos.map((uri, i) => (
-                <View key={i} style={styles.photoThumb}>
-                  <Image source={{ uri: uri.uri }} style={styles.photoImage} />
-                </View>
-              ))}
-            </ScrollView>
-          )}
+
+          {articulos.map((articulo, index) => (
+            <View key={articulo.id} style={styles.articuloCard}>
+              <View style={styles.articuloHeader}>
+                <Text style={styles.articuloTitle}>Articulo {index + 1}</Text>
+                <Button title="Eliminar" variant="ghost" size="sm" onPress={() => removeArticulo(articulo.id)} disabled={articulos.length === 1} />
+              </View>
+
+              <Input
+                label="Descripcion del articulo"
+                placeholder="Ej: Taza de porcelana con dorado"
+                value={articulo.descripcion}
+                onChangeText={(value) => updateArticulo(articulo.id, { descripcion: value })}
+                multiline
+              />
+
+              <View style={styles.photoInfo}>
+                <Text style={styles.photoCount}>{articulo.fotos.length} fotos</Text>
+                <Button title="Agregar fotos" variant="outline" size="sm" onPress={() => pickArticuloPhotos(articulo.id)} />
+              </View>
+
+              {articulo.fotos.length > 0 && (
+                <ScrollView horizontal style={styles.photoStrip}>
+                  {articulo.fotos.map((foto, photoIndex) => (
+                    <View key={`${articulo.id}-${photoIndex}`} style={styles.photoThumb}>
+                      <Image source={{ uri: foto.uri }} style={styles.photoImage} />
+                    </View>
+                  ))}
+                </ScrollView>
+              )}
+            </View>
+          ))}
+
+          <Text style={styles.helperText}>Cada articulo necesita su propia descripcion y al menos una foto. El precio base aplica al lote completo.</Text>
 
           {/* T504: Declaration checkbox */}
           <View style={styles.declarationRow}>
@@ -500,6 +562,11 @@ const styles = StyleSheet.create({
   tabTextActive: { color: colors.ink },
   form: { padding: spacing.lg, paddingBottom: spacing['3xl'] },
   sectionTitle: { fontFamily: fonts.headingSemibold, fontSize: fontSizes.lg, color: colors.textPrimary, marginTop: spacing.md, marginBottom: spacing.sm },
+  sectionHeaderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', gap: spacing.sm },
+  articuloCard: { backgroundColor: colors.parchment, borderRadius: radius.lg, padding: spacing.md, marginBottom: spacing.md },
+  articuloHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.sm },
+  articuloTitle: { fontFamily: fonts.headingSemibold, fontSize: fontSizes.base, color: colors.textPrimary },
+  helperText: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.textMuted, marginTop: spacing.xs, marginBottom: spacing.md, lineHeight: 20 },
   photoInfo: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: spacing.sm },
   photoCount: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.textSecondary },
   photoStrip: { marginBottom: spacing.lg },

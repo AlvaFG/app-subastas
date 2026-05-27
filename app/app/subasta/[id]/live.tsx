@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, FlatList, TextInput, KeyboardAvoidingView, Platform, Alert,
+  View, Text, StyleSheet, FlatList, TextInput, KeyboardAvoidingView, Platform, Alert, ScrollView, Image,
 } from 'react-native';
 import { useLocalSearchParams, Stack } from 'expo-router';
 import Animated, {
@@ -26,6 +26,12 @@ interface CurrentItem {
   precioBase: number;
   descripcionCatalogo: string;
   subastaCat?: string;
+  articulos?: {
+    identificador: number;
+    orden: number;
+    descripcion: string;
+    fotos: string[];
+  }[];
 }
 
 interface MedioPagoOption {
@@ -361,6 +367,25 @@ export default function LiveAuctionScreen() {
           <Text style={styles.itemTitle}>{currentItem.descripcionCatalogo}</Text>
           <Text style={styles.basePrice}>Base: {formatPrice(currentItem.precioBase)}</Text>
 
+          {currentItem.articulos && currentItem.articulos.length > 0 && (
+            <View style={styles.articleSection}>
+              <Text style={styles.articleSectionTitle}>Articulos del lote</Text>
+              {currentItem.articulos.map((articulo) => (
+                <View key={articulo.identificador} style={styles.articleCard}>
+                  <Text style={styles.articleTitle}>Articulo {articulo.orden}</Text>
+                  <Text style={styles.articleDescription}>{articulo.descripcion}</Text>
+                  {articulo.fotos.length > 0 && (
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.articlePhotos}>
+                      {articulo.fotos.map((foto, index) => (
+                        <Image key={`${articulo.identificador}-${index}`} source={{ uri: foto }} style={styles.articleImage} resizeMode="cover" />
+                      ))}
+                    </ScrollView>
+                  )}
+                </View>
+              ))}
+            </View>
+          )}
+
           <Animated.View style={[styles.priceContainer, shadows.glow, priceAnimStyle]}>
             <Text style={styles.priceLabel}>Mejor Oferta</Text>
             <Text style={styles.currentPrice}>{formatPrice(bestBid)}</Text>
@@ -483,6 +508,13 @@ const styles = StyleSheet.create({
   itemSection: { paddingHorizontal: spacing.lg, paddingBottom: spacing.lg },
   itemTitle: { fontFamily: fonts.headingSemibold, fontSize: fontSizes.xl, color: colors.ivory },
   basePrice: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.textMuted, marginTop: spacing.xs },
+  articleSection: { marginTop: spacing.md },
+  articleSectionTitle: { fontFamily: fonts.bodyMedium, fontSize: fontSizes.sm, color: colors.textMuted, marginBottom: spacing.sm },
+  articleCard: { backgroundColor: colors.graphite, borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.sm },
+  articleTitle: { fontFamily: fonts.bodySemibold, fontSize: fontSizes.base, color: colors.ivory },
+  articleDescription: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.textMuted, marginTop: spacing.xs, lineHeight: 21 },
+  articlePhotos: { marginTop: spacing.sm },
+  articleImage: { width: 120, height: 120, borderRadius: radius.md, marginRight: spacing.sm },
 
   priceContainer: { backgroundColor: colors.graphite, borderRadius: radius.lg, padding: spacing.lg, marginTop: spacing.md, alignItems: 'center' },
   priceLabel: { fontFamily: fonts.bodyMedium, fontSize: fontSizes.sm, color: colors.textMuted },

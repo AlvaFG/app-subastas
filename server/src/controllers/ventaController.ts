@@ -13,6 +13,106 @@ import {
 const AUTO_ACCEPT_DELAY_MS = 30_000;
 let schemaEnsurePromise: Promise<void> | null = null;
 
+interface SolicitudArticuloInput {
+  descripcion: string;
+  fotos: string[];
+}
+
+function cleanBase64Photo(raw: unknown): string | null {
+  if (typeof raw !== 'string' || !raw.trim()) {
+    return null;
+  }
+
+  const normalized = raw.includes(',')
+    ? raw.split(',').pop() || ''
+    : raw;
+
+  return normalized.trim() || null;
+}
+
+function normalizePhotoList(raw: unknown): string[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  return raw.map(cleanBase64Photo).filter((photo): photo is string => !!photo);
+}
+
+function parseSolicitudArticulos(body: any): SolicitudArticuloInput[] {
+  if (Array.isArray(body.articulos) && body.articulos.length > 0) {
+    return body.articulos.map((articulo: any, index: number) => {
+      const descripcion = typeof articulo?.descripcion === 'string' ? articulo.descripcion.trim() : '';
+      const fotos = normalizePhotoList(articulo?.fotos);
+
+      if (!descripcion) {
+        throw new Error(`El articulo ${index + 1} debe tener una descripcion`);
+      }
+
+      if (fotos.length === 0) {
+        throw new Error(`El articulo ${index + 1} debe tener al menos una foto`);
+      }
+
+      return { descripcion, fotos };
+    });
+  }
+
+  const descripcion = typeof body.descripcion === 'string' ? body.descripcion.trim() : '';
+  const fotos = normalizePhotoList(body.fotos);
+
+  if (!descripcion) {
+    throw new Error('Debe indicar una descripcion para la solicitud');
+  }
+
+  if (fotos.length === 0) {
+    throw new Error('Debe indicar al menos una foto para la solicitud');
+  }
+
+  return [{ descripcion, fotos }];
+}
+
+async function loadSolicitudArticulos(
+  pool: sql.ConnectionPool,
+  solicitudId: number,
+  fallbackDescripcion: string,
+): Promise<SolicitudArticuloInput[]> {
+  const articulosResult = await pool.request()
+    .input('solicitud', solicitudId)
+    .query(`
+      SELECT identificador, orden, descripcion
+      FROM solicitudArticulos
+      WHERE solicitud = @solicitud
+      ORDER BY orden, identificador
+    `);
+
+  if (articulosResult.recordset.length > 0) {
+    const fotosResult = await pool.request()
+      .input('solicitud', solicitudId)
+      .query(`
+        SELECT saf.articulo, saf.foto
+        FROM solicitudArticuloFotos saf
+        INNER JOIN solicitudArticulos sa ON sa.identificador = saf.articulo
+        WHERE sa.solicitud = @solicitud
+        ORDER BY sa.orden, saf.identificador
+      `);
+
+    return articulosResult.recordset.map((articulo: any) => ({
+      descripcion: articulo.descripcion,
+      fotos: fotosResult.recordset
+        .filter((foto: any) => foto.articulo === articulo.identificador)
+        .map((foto: any) => `data:image/jpeg;base64,${Buffer.from(foto.foto).toString('base64')}`),
+    }));
+  }
+
+  const legacyFotos = await pool.request()
+    .input('solicitud', solicitudId)
+    .query('SELECT foto FROM solicitudFotos WHERE solicitud = @solicitud ORDER BY identificador');
+
+  return [{
+    descripcion: fallbackDescripcion,
+    fotos: legacyFotos.recordset.map((foto: any) => `data:image/jpeg;base64,${Buffer.from(foto.foto).toString('base64')}`),
+  }];
+}
+
 async function ensureVentaSchema(): Promise<void> {
   if (!schemaEnsurePromise) {
     schemaEnsurePromise = (async () => {
@@ -56,6 +156,52 @@ async function ensureVentaSchema(): Promise<void> {
             foto VARBINARY(MAX) NOT NULL,
             CONSTRAINT pk_solicitudFotos PRIMARY KEY (identificador),
             CONSTRAINT fk_solicitudFotos_solicitudesVenta FOREIGN KEY (solicitud) REFERENCES solicitudesVenta(identificador)
+          );
+        END
+
+        IF OBJECT_ID('solicitudArticulos', 'U') IS NULL
+        BEGIN
+          CREATE TABLE solicitudArticulos (
+            identificador INT NOT NULL IDENTITY,
+            solicitud INT NOT NULL,
+            orden INT NOT NULL,
+            descripcion VARCHAR(1000) NOT NULL,
+            CONSTRAINT pk_solicitudArticulos PRIMARY KEY (identificador),
+            CONSTRAINT fk_solicitudArticulos_solicitudesVenta FOREIGN KEY (solicitud) REFERENCES solicitudesVenta(identificador)
+          );
+        END
+
+        IF OBJECT_ID('solicitudArticuloFotos', 'U') IS NULL
+        BEGIN
+          CREATE TABLE solicitudArticuloFotos (
+            identificador INT NOT NULL IDENTITY,
+            articulo INT NOT NULL,
+            foto VARBINARY(MAX) NOT NULL,
+            CONSTRAINT pk_solicitudArticuloFotos PRIMARY KEY (identificador),
+            CONSTRAINT fk_solicitudArticuloFotos_solicitudArticulos FOREIGN KEY (articulo) REFERENCES solicitudArticulos(identificador)
+          );
+        END
+
+        IF OBJECT_ID('productoArticulos', 'U') IS NULL
+        BEGIN
+          CREATE TABLE productoArticulos (
+            identificador INT NOT NULL IDENTITY,
+            producto INT NOT NULL,
+            orden INT NOT NULL,
+            descripcion VARCHAR(1000) NOT NULL,
+            CONSTRAINT pk_productoArticulos PRIMARY KEY (identificador),
+            CONSTRAINT fk_productoArticulos_productos FOREIGN KEY (producto) REFERENCES productos(identificador)
+          );
+        END
+
+        IF OBJECT_ID('productoArticuloFotos', 'U') IS NULL
+        BEGIN
+          CREATE TABLE productoArticuloFotos (
+            identificador INT NOT NULL IDENTITY,
+            articulo INT NOT NULL,
+            foto VARBINARY(MAX) NOT NULL,
+            CONSTRAINT pk_productoArticuloFotos PRIMARY KEY (identificador),
+            CONSTRAINT fk_productoArticuloFotos_productoArticulos FOREIGN KEY (articulo) REFERENCES productoArticulos(identificador)
           );
         END
       `);
@@ -170,6 +316,7 @@ export async function createSolicitud(req: AuthRequest, res: Response): Promise<
       nombreArtistaDisenador,
       fechaObjeto,
       historiaObjeto,
+      articulos,
       fotos,
     } = req.body;
 
@@ -183,6 +330,16 @@ export async function createSolicitud(req: AuthRequest, res: Response): Promise<
     const monedaFinal = moneda === 'USD' ? 'USD' : 'ARS';
     const esObraFinal = esObraDisenador === 'si' ? 'si' : 'no';
     const horaSubastaFinal = normalizeHoraSubasta(horaSubasta);
+    let articulosSolicitud: SolicitudArticuloInput[];
+    try {
+      articulosSolicitud = parseSolicitudArticulos({ descripcion, fotos, articulos });
+    } catch (parseError) {
+      res.status(400).json({
+        success: false,
+        error: parseError instanceof Error ? parseError.message : 'Articulos invalidos',
+      });
+      return;
+    }
 
     const result = await pool.request()
       .input('cliente', req.user!.id)
@@ -210,17 +367,30 @@ export async function createSolicitud(req: AuthRequest, res: Response): Promise<
 
     const solicitudId = result.recordset[0].identificador;
 
-    if (Array.isArray(fotos) && fotos.length > 0) {
-      for (const fotoBase64Raw of fotos) {
-        if (typeof fotoBase64Raw !== 'string' || !fotoBase64Raw.trim()) continue;
-        const cleanBase64 = fotoBase64Raw.includes(',')
-          ? fotoBase64Raw.split(',').pop() || ''
-          : fotoBase64Raw;
-        const buffer = Buffer.from(cleanBase64, 'base64');
+    for (const [index, articulo] of articulosSolicitud.entries()) {
+      const articuloResult = await pool.request()
+        .input('solicitud', solicitudId)
+        .input('orden', index + 1)
+        .input('descripcion', articulo.descripcion)
+        .query(`
+          INSERT INTO solicitudArticulos (solicitud, orden, descripcion)
+          OUTPUT INSERTED.identificador
+          VALUES (@solicitud, @orden, @descripcion)
+        `);
+
+      const articuloId = articuloResult.recordset[0].identificador;
+
+      for (const fotoBase64 of articulo.fotos) {
+        const buffer = Buffer.from(fotoBase64, 'base64');
         await pool.request()
           .input('solicitud', solicitudId)
           .input('foto', sql.VarBinary(sql.MAX), buffer)
           .query('INSERT INTO solicitudFotos (solicitud, foto) VALUES (@solicitud, @foto)');
+
+        await pool.request()
+          .input('articulo', articuloId)
+          .input('foto', sql.VarBinary(sql.MAX), buffer)
+          .query('INSERT INTO solicitudArticuloFotos (articulo, foto) VALUES (@articulo, @foto)');
       }
     }
 
@@ -528,6 +698,7 @@ export async function responderSolicitud(req: AuthRequest, res: Response): Promi
 
       const productoId = productoResult.recordset[0].identificador;
       console.log(`[VENTA] Producto creado: ${productoId}`);
+  const articulosSolicitud = await loadSolicitudArticulos(pool, Number(id), solicitud.descripcion);
 
       // Crear una subasta nueva por cada solicitud aceptada para que se refleje como nueva entrada.
       const precioBaseItem = solicitud.valorBase || 100.00;
@@ -615,15 +786,32 @@ export async function responderSolicitud(req: AuthRequest, res: Response): Promi
           VALUES (@catalogo, @producto, @precioBase, @comision)
         `);
 
-      await pool.request()
-        .input('solicitudId', id)
-        .input('productoId', productoId)
-        .query(`
-          INSERT INTO fotos (producto, foto)
-          SELECT @productoId, sf.foto
-          FROM solicitudFotos sf
-          WHERE sf.solicitud = @solicitudId
-        `);
+      for (const [index, articulo] of articulosSolicitud.entries()) {
+        const articuloResult = await pool.request()
+          .input('producto', productoId)
+          .input('orden', index + 1)
+          .input('descripcion', articulo.descripcion)
+          .query(`
+            INSERT INTO productoArticulos (producto, orden, descripcion)
+            OUTPUT INSERTED.identificador
+            VALUES (@producto, @orden, @descripcion)
+          `);
+
+        const productoArticuloId = articuloResult.recordset[0].identificador;
+
+        for (const fotoBase64 of articulo.fotos) {
+          const buffer = Buffer.from(fotoBase64.replace(/^data:image\/[^;]+;base64,/, ''), 'base64');
+          await pool.request()
+            .input('productoId', productoId)
+            .input('foto', sql.VarBinary(sql.MAX), buffer)
+            .query('INSERT INTO fotos (producto, foto) VALUES (@productoId, @foto)');
+
+          await pool.request()
+            .input('articulo', productoArticuloId)
+            .input('foto', sql.VarBinary(sql.MAX), buffer)
+            .query('INSERT INTO productoArticuloFotos (articulo, foto) VALUES (@articulo, @foto)');
+        }
+      }
       
       console.log(`[VENTA] Item de catalogo creado exitosamente`);
     }

@@ -380,7 +380,35 @@ export async function getItemDetalle(req: AuthRequest, res: Response): Promise<v
       fotos: fotos.recordset.map((f: any) => `data:image/jpeg;base64,${Buffer.from(f.foto).toString('base64')}`),
     };
 
-    res.json({ success: true, data: item });
+    const articulosResult = await pool.request()
+      .input('productoId', item.productoId)
+      .query(`
+        SELECT pa.identificador, pa.orden, pa.descripcion
+        FROM productoArticulos pa
+        WHERE pa.producto = @productoId
+        ORDER BY pa.orden, pa.identificador
+      `);
+
+    const fotosArticulosResult = await pool.request()
+      .input('productoId', item.productoId)
+      .query(`
+        SELECT paf.articulo, paf.foto
+        FROM productoArticuloFotos paf
+        INNER JOIN productoArticulos pa ON pa.identificador = paf.articulo
+        WHERE pa.producto = @productoId
+        ORDER BY pa.orden, paf.identificador
+      `);
+
+    const articulos = articulosResult.recordset.map((articulo: any) => ({
+      identificador: articulo.identificador,
+      orden: articulo.orden,
+      descripcion: articulo.descripcion,
+      fotos: fotosArticulosResult.recordset
+        .filter((foto: any) => foto.articulo === articulo.identificador)
+        .map((foto: any) => `data:image/jpeg;base64,${Buffer.from(foto.foto).toString('base64')}`),
+    }));
+
+    res.json({ success: true, data: { ...item, articulos } });
   } catch (error) {
     console.error('Error getItemDetalle:', error);
     res.status(500).json({ success: false, error: 'Error interno del servidor' });
