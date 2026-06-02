@@ -28,8 +28,11 @@ export default function RootLayout() {
     if (isLoading || !fontsLoaded) return;
 
     const inAuthGroup = segments[0] === '(auth)';
+    // La capa administrativa tiene su propia sesion (token de empleado) y su propio
+    // guard en (admin)/_layout. El guard de cliente la ignora para no expulsar al admin.
+    const inAdminGroup = segments[0] === '(admin)';
 
-    if (!isAuthenticated && !inAuthGroup) {
+    if (!isAuthenticated && !inAuthGroup && !inAdminGroup) {
       router.replace('/(auth)/login');
     } else if (isAuthenticated && inAuthGroup) {
       router.replace('/(tabs)');
@@ -43,6 +46,7 @@ export default function RootLayout() {
       <StatusBar style="light" />
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="(auth)" />
+        <Stack.Screen name="(admin)" />
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="subasta/[id]" options={{ headerShown: true, title: 'Subasta' }} />
         <Stack.Screen name="item/[id]" options={{ headerShown: true, title: 'Detalle' }} />

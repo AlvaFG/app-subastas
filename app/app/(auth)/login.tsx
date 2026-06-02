@@ -73,6 +73,9 @@ export default function LoginScreen() {
             <Text style={styles.linkText}>No tenes cuenta? </Text>
             <Link href="/(auth)/register/step1" style={styles.link}>Registrate</Link>
           </View>
+          <View style={styles.linkRow}>
+            <Link href="/(admin)/login" style={styles.linkMuted}>Acceso empleados</Link>
+          </View>
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -90,4 +93,5 @@ const styles = StyleSheet.create({
   linkRow: { flexDirection: 'row', justifyContent: 'center', marginTop: spacing.lg },
   linkText: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.textSecondary },
   link: { fontFamily: fonts.bodySemibold, fontSize: fontSizes.sm, color: colors.auctionGold },
+  linkMuted: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.textMuted, marginTop: spacing.sm, textDecorationLine: 'underline' },
 });

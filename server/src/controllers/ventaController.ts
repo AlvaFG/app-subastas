@@ -10,7 +10,6 @@ import {
   resolveInsurancePolicyByPriceBase,
 } from '../utils/insurance';
 
-const AUTO_ACCEPT_DELAY_MS = 30_000;
 let schemaEnsurePromise: Promise<void> | null = null;
 
 interface SolicitudArticuloInput {
@@ -231,23 +230,6 @@ function getParamAsString(param: string | string[] | undefined): string | null {
   return null;
 }
 
-function scheduleAutoAcceptSolicitud(solicitudId: number): void {
-  setTimeout(async () => {
-    try {
-      const pool = await connectDB();
-      await pool.request()
-        .input('id', solicitudId)
-        .query(`
-          UPDATE solicitudesVenta
-          SET estado = 'aceptada'
-          WHERE identificador = @id AND estado = 'pendiente'
-        `);
-    } catch (error) {
-      console.error('Error auto-aceptando solicitud:', error);
-    }
-  }, AUTO_ACCEPT_DELAY_MS);
-}
-
 function enrichSolicitudRow(row: any): any {
   const nextPolicy = getNextInsurancePolicyByCurrentNroPoliza(row.nroPoliza);
   const currentImporteSeguro = Number(row.importeSeguro || 0);
@@ -277,7 +259,7 @@ async function fetchSolicitudConCobertura(
     .query(`
       SELECT s.identificador, s.descripcion, s.datosHistoricos, s.estado,
              s.motivoRechazo, s.fechaSolicitud, s.valorBase, s.comisionPropuesta,
-             s.aceptadoPorUsuario, s.moneda, s.horaSubasta, s.esObraDisenador,
+             s.aceptadoPorUsuario, s.gastosDevolucion, s.moneda, s.horaSubasta, s.esObraDisenador,
              s.nombreArtistaDisenador, s.fechaObjeto, s.historiaObjeto, s.productoId,
              sub.estado as estadoSubasta,
              pr.deposito as depositoId, d.nombre as depositoNombre, d.direccion as depositoDireccion,
@@ -311,11 +293,11 @@ export async function createSolicitud(req: AuthRequest, res: Response): Promise<
       valorBase,
       declaracionPropiedad,
       moneda,
-      horaSubasta,
       esObraDisenador,
       nombreArtistaDisenador,
       fechaObjeto,
       historiaObjeto,
+      origenLicito,
       articulos,
       fotos,
     } = req.body;
@@ -329,7 +311,8 @@ export async function createSolicitud(req: AuthRequest, res: Response): Promise<
 
     const monedaFinal = moneda === 'USD' ? 'USD' : 'ARS';
     const esObraFinal = esObraDisenador === 'si' ? 'si' : 'no';
-    const horaSubastaFinal = normalizeHoraSubasta(horaSubasta);
+    // W9: hora por defecto interna; la empresa define el horario real de la subasta.
+    const horaSubastaFinal = normalizeHoraSubasta();
     let articulosSolicitud: SolicitudArticuloInput[];
     try {
       articulosSolicitud = parseSolicitudArticulos({ descripcion, fotos, articulos });
@@ -353,15 +336,16 @@ export async function createSolicitud(req: AuthRequest, res: Response): Promise<
       .input('nombreArtistaDisenador', esObraFinal === 'si' ? nombreArtistaDisenador || null : null)
       .input('fechaObjeto', esObraFinal === 'si' ? fechaObjeto || null : null)
       .input('historiaObjeto', esObraFinal === 'si' ? historiaObjeto || null : null)
+      .input('origenLicito', origenLicito === 'si' ? 'si' : 'no')
       .query(`
         INSERT INTO solicitudesVenta (
           cliente, descripcion, datosHistoricos, valorBase, declaracionPropiedad,
-          moneda, horaSubasta, esObraDisenador, nombreArtistaDisenador, fechaObjeto, historiaObjeto
+          moneda, horaSubasta, esObraDisenador, nombreArtistaDisenador, fechaObjeto, historiaObjeto, origenLicito
         )
         OUTPUT INSERTED.identificador
         VALUES (
           @cliente, @descripcion, @datosHistoricos, @valorBase, @declaracionPropiedad,
-          @moneda, @horaSubasta, @esObraDisenador, @nombreArtistaDisenador, @fechaObjeto, @historiaObjeto
+          @moneda, @horaSubasta, @esObraDisenador, @nombreArtistaDisenador, @fechaObjeto, @historiaObjeto, @origenLicito
         )
       `);
 
@@ -394,11 +378,12 @@ export async function createSolicitud(req: AuthRequest, res: Response): Promise<
       }
     }
 
-    scheduleAutoAcceptSolicitud(solicitudId);
-
+    // A9/W9: la solicitud queda 'pendiente'. La empresa la inspecciona y define
+    // precio base/comision (PUT /api/admin/venta/solicitudes/:id/respuesta). El
+    // usuario solo PROPONE; no crea la subasta ni se auto-acepta.
     res.status(201).json({
       success: true,
-      data: { identificador: solicitudId },
+      data: { identificador: solicitudId, estado: 'pendiente' },
     });
   } catch (error) {
     console.error('Error createSolicitud:', error);
@@ -417,7 +402,7 @@ export async function getSolicitudes(req: AuthRequest, res: Response): Promise<v
       .query(`
         SELECT s.identificador, s.descripcion, s.datosHistoricos, s.estado,
                s.motivoRechazo, s.fechaSolicitud, s.valorBase, s.comisionPropuesta,
-               s.aceptadoPorUsuario, s.moneda, s.horaSubasta, s.esObraDisenador,
+               s.aceptadoPorUsuario, s.gastosDevolucion, s.moneda, s.horaSubasta, s.esObraDisenador,
                s.nombreArtistaDisenador, s.fechaObjeto, s.historiaObjeto, s.productoId,
                sub.estado as estadoSubasta,
                pr.deposito as depositoId, d.nombre as depositoNombre, d.direccion as depositoDireccion,
@@ -643,15 +628,31 @@ export async function responderSolicitud(req: AuthRequest, res: Response): Promi
       .input('id', id)
       .input('cliente', req.user!.id)
       .query(`
-        SELECT identificador, estado, descripcion, datosHistoricos, valorBase,
+        SELECT identificador, estado, descripcion, datosHistoricos, valorBase, comisionPropuesta,
                moneda, horaSubasta, esObraDisenador, nombreArtistaDisenador, fechaObjeto, historiaObjeto
         FROM solicitudesVenta
         WHERE identificador = @id AND cliente = @cliente AND estado = 'aceptada'
       `);
 
     if (check.recordset.length === 0) {
-      res.status(404).json({ success: false, error: 'Solicitud no encontrada o no esta aceptada' });
+      res.status(404).json({ success: false, error: 'Solicitud no encontrada o no esta aceptada por la empresa' });
       return;
+    }
+
+    // TPO §190: las cuentas a la vista deben declararse ANTES del inicio de la subasta.
+    // La subasta se crea al aceptar las condiciones, por lo que exigimos que el usuario
+    // ya tenga una cuenta declarada (donde recibir el dinero de la venta).
+    if (acepta === 'si') {
+      const cuenta = await pool.request()
+        .input('duenio', req.user!.id)
+        .query("SELECT COUNT(*) as count FROM cuentasAVista WHERE duenio = @duenio AND activa = 'si'");
+      if (cuenta.recordset[0].count === 0) {
+        res.status(400).json({
+          success: false,
+          error: 'Debe declarar una cuenta a la vista antes de que su bien entre en subasta.',
+        });
+        return;
+      }
     }
 
     await pool.request()
@@ -784,8 +785,10 @@ export async function responderSolicitud(req: AuthRequest, res: Response): Promi
         console.log(`[VENTA] Catalogo creado: ${catalogoId}`);
       }
 
-      // Crear item de catálogo usando precio base de la solicitud
-      const comisionItem = (precioBaseItem * 0.1);
+      // Crear item de catálogo usando precio base y la comision definida por la EMPRESA.
+      const comisionItem = Number.isFinite(Number(solicitud.comisionPropuesta)) && Number(solicitud.comisionPropuesta) >= 0
+        ? Number(solicitud.comisionPropuesta)
+        : +(precioBaseItem * 0.1).toFixed(2);
       console.log(`[VENTA] Creando item con precio ${precioBaseItem}, comision ${comisionItem}`);
       await pool.request()
         .input('catalogo', catalogoId)
@@ -825,11 +828,33 @@ export async function responderSolicitud(req: AuthRequest, res: Response): Promi
       }
       
       console.log(`[VENTA] Item de catalogo creado exitosamente`);
+    } else {
+      // TPO: si el usuario no acepta el valor base/comision, el bien se devuelve
+      // CON CARGO. Sin tabla de tarifas de transporte, los gastos de devolucion se
+      // estiman como 5% del valor base (simplificacion academica documentada).
+      const base = Number(check.recordset[0].valorBase || 0);
+      const gastosDevolucion = +(base * 0.05).toFixed(2);
+      await pool.request()
+        .input('id', id)
+        .input('gastos', gastosDevolucion)
+        .query(`
+          UPDATE solicitudesVenta
+          SET estado = 'devuelta', gastosDevolucion = @gastos
+          WHERE identificador = @id
+        `);
+
+      await pool.request()
+        .input('cliente', req.user!.id)
+        .input('mensaje', `Rechazo las condiciones. El bien sera devuelto con un cargo de ${check.recordset[0].moneda || 'ARS'} ${gastosDevolucion.toFixed(2)} (gastos de devolucion).`)
+        .query(`
+          INSERT INTO notificaciones (cliente, tipo, titulo, mensaje)
+          VALUES (@cliente, 'sistema', 'Devolucion con cargo', @mensaje)
+        `);
     }
 
     const mensaje = acepta === 'si'
       ? 'Acepto las condiciones. Su bien sera incluido en la subasta.'
-      : 'Rechazo las condiciones. Se procedera a la devolucion.';
+      : 'Rechazo las condiciones. Se procedera a la devolucion con cargo.';
 
     res.json({ success: true, data: { mensaje } });
   } catch (error) {

@@ -22,6 +22,12 @@ interface TokenPayload {
   admitido: string;
 }
 
+interface AdminTokenPayload {
+  id: number;
+  email: string;
+  rol: string;
+}
+
 function signTokens(payload: TokenPayload): { accessToken: string; refreshToken: string } {
   const accessToken = jwt.sign(payload, getJwtSecret(), { expiresIn: ACCESS_TTL });
   const refreshToken = jwt.sign(payload, getJwtRefreshSecret(), { expiresIn: REFRESH_TTL });
@@ -63,7 +69,6 @@ async function saveDocumentPhotos(
 export async function registerStep1(req: Request, res: Response): Promise<void> {
   try {
     const { documento, nombre, apellido, direccion, numeroPais, fotoFrente, fotoDorso } = req.body;
-    const fullName = apellido ? `${nombre} ${apellido}` : nombre;
 
     const pool = await connectDB();
 
@@ -78,9 +83,9 @@ export async function registerStep1(req: Request, res: Response): Promise<void> 
     }
 
     // verificador: use a real, existing empleado instead of a hardcoded id (BSEC-02).
-    // NOTE (academic simplification): there is no external-investigation admin panel,
-    // so registration auto-admits the client and assigns the system's first empleado
-    // as verificador. The category stays 'comun' until upgraded by activity.
+    // A5: el cliente queda PENDIENTE de admision (admitido='no'). La empresa lo
+    // admite y le asigna categoria via PATCH /api/admin/clientes/:id/admitir.
+    // Hasta entonces, register/step2 devuelve 403 (no puede crear su clave).
     const verificadorResult = await pool.request()
       .query('SELECT TOP 1 identificador FROM empleados ORDER BY identificador');
     if (verificadorResult.recordset.length === 0) {
@@ -92,16 +97,17 @@ export async function registerStep1(req: Request, res: Response): Promise<void> 
     }
     const verificadorId = verificadorResult.recordset[0].identificador;
 
-    // Insertar persona
+    // Insertar persona con nombre y apellido por separado (A4-W2).
     const personaResult = await pool.request()
       .input('documento', documento)
-      .input('nombre', fullName)
+      .input('nombre', nombre)
+      .input('apellido', apellido || null)
       .input('direccion', direccion)
       .input('estado', 'activo')
       .query(`
-        INSERT INTO personas (documento, nombre, direccion, estado)
+        INSERT INTO personas (documento, nombre, apellido, direccion, estado)
         OUTPUT INSERTED.identificador
-        VALUES (@documento, @nombre, @direccion, @estado)
+        VALUES (@documento, @nombre, @apellido, @direccion, @estado)
       `);
 
     const personaId = personaResult.recordset[0].identificador;
@@ -122,11 +128,12 @@ export async function registerStep1(req: Request, res: Response): Promise<void> 
       }
     }
 
-    // Auto-aprobar al usuario al completar etapa 1 (simplificacion academica: no hay
-    // investigacion externa). La categoria base es 'comun'; nunca se asigna al azar.
+    // A5: el cliente arranca PENDIENTE (admitido='no'). La empresa lo admite y le
+    // asigna categoria tras la investigacion externa. La categoria 'comun' es el
+    // valor por defecto del schema hasta que un empleado la confirme/eleve.
     const insertReq = pool.request()
       .input('identificador', personaId)
-      .input('admitido', 'si')
+      .input('admitido', 'no')
       .input('categoria', 'comun')
       .input('verificador', verificadorId);
 
@@ -152,8 +159,9 @@ export async function registerStep1(req: Request, res: Response): Promise<void> 
       success: true,
       data: {
         identificador: personaId,
-        autoAprobado: true,
-        mensaje: 'Registro etapa 1 completado. Puede continuar con la etapa 2.',
+        autoAprobado: false,
+        admitido: 'no',
+        mensaje: 'Registro etapa 1 recibido. La empresa revisara sus datos; cuando sea admitido podra completar la etapa 2 y crear su clave.',
       },
     });
   } catch (error) {
@@ -335,6 +343,68 @@ export async function login(req: Request, res: Response): Promise<void> {
   }
 }
 
+// POST /auth/admin/login — autenticacion de empleado/admin (A5/A6/A7/A9).
+// Emite un access token con claim `rol`. No genera refresh token porque la tabla
+// `sesiones` referencia `clientes` (un empleado no es cliente); el panel admin
+// reautentica al expirar.
+export async function adminLogin(req: Request, res: Response): Promise<void> {
+  try {
+    const { email, clave } = req.body;
+
+    const pool = await connectDB();
+
+    const result = await pool.request()
+      .input('email', email)
+      .query(`
+        SELECT e.identificador, e.email, e.claveHash, e.rol, p.nombre, p.estado
+        FROM empleados e
+        INNER JOIN personas p ON p.identificador = e.identificador
+        WHERE e.email = @email
+      `);
+
+    if (result.recordset.length === 0) {
+      res.status(401).json({ success: false, error: 'Credenciales invalidas' });
+      return;
+    }
+
+    const emp = result.recordset[0];
+
+    if (emp.estado === 'inactivo') {
+      res.status(403).json({ success: false, error: 'Cuenta bloqueada' });
+      return;
+    }
+
+    if (!emp.claveHash) {
+      res.status(401).json({ success: false, error: 'Credenciales invalidas' });
+      return;
+    }
+
+    const validPassword = await bcrypt.compare(clave, emp.claveHash);
+    if (!validPassword) {
+      res.status(401).json({ success: false, error: 'Credenciales invalidas' });
+      return;
+    }
+
+    const payload: AdminTokenPayload = {
+      id: emp.identificador,
+      email: emp.email,
+      rol: emp.rol,
+    };
+    const accessToken = jwt.sign(payload, getJwtSecret(), { expiresIn: ACCESS_TTL });
+
+    res.json({
+      success: true,
+      data: {
+        accessToken,
+        user: { id: emp.identificador, nombre: emp.nombre, email: emp.email, rol: emp.rol },
+      },
+    });
+  } catch (error) {
+    console.error('Error en adminLogin:', error);
+    res.status(500).json({ success: false, error: 'Error interno del servidor' });
+  }
+}
+
 // POST /auth/refresh — rotates the refresh token (BSEC-04)
 export async function refreshToken(req: Request, res: Response): Promise<void> {
   try {
@@ -452,7 +522,7 @@ export async function getMe(req: AuthRequest, res: Response): Promise<void> {
     const result = await pool.request()
       .input('id', req.user.id)
       .query(`
-        SELECT p.identificador, p.documento, p.nombre, p.direccion,
+        SELECT p.identificador, p.documento, p.nombre, p.apellido, p.direccion,
                c.email, c.categoria, c.admitido, c.numeroPais,
                pa.nombre as paisNombre
         FROM personas p

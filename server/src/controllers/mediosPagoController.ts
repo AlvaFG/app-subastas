@@ -61,11 +61,10 @@ export async function createMedioPago(req: AuthRequest, res: Response): Promise<
       .input('internacional', internacional || 'no')
       .input('montoCheque', montoChequeFinal)
       .input('montoDisponible', montoInicialSeguro)
-      // REQ-03: el medio se crea verificado='si' por simplificacion academica.
-      // En un sistema real la empresa verificaria el medio antes de habilitarlo;
-      // como no existe panel admin en esta demo, se asume verificado al crear.
-      // La (des)verificacion manual queda expuesta via verificarMedioPago.
-      .input('verificado', 'si')
+      // REQ-03 / A6: el medio se crea verificado='no'. Solo la empresa lo habilita
+      // (PUT /api/admin/medios-pago/:id/verificar). Hasta entonces el usuario no
+      // puede pujar con el (ver join-auction / place-bid).
+      .input('verificado', 'no')
       .query(`
         INSERT INTO mediosDePago (cliente, tipo, descripcion, banco, numeroCuenta, cbu, moneda,
                                    ultimosDigitos, internacional, montoCheque, montoDisponible, verificado)
@@ -123,43 +122,6 @@ export async function updateMedioPago(req: AuthRequest, res: Response): Promise<
     res.json({ success: true, data: { mensaje: 'Medio de pago actualizado' } });
   } catch (error) {
     console.error('Error updateMedioPago:', error);
-    res.status(500).json({ success: false, error: 'Error interno del servidor' });
-  }
-}
-
-// PUT /medios-pago/:id/verificar - (Des)verificar un medio (REQ-03)
-// Simula la verificacion por parte de la empresa. La validacion del valor
-// ('si' | 'no') se realiza con express-validator en la ruta.
-export async function verificarMedioPago(req: AuthRequest, res: Response): Promise<void> {
-  try {
-    const { id } = req.params;
-    const { verificado } = req.body;
-
-    if (verificado !== 'si' && verificado !== 'no') {
-      res.status(400).json({ success: false, error: 'Valor de verificado invalido' });
-      return;
-    }
-
-    const pool = await connectDB();
-
-    const result = await pool.request()
-      .input('id', id)
-      .input('cliente', req.user!.id)
-      .input('verificado', verificado)
-      .query(`
-        UPDATE mediosDePago
-        SET verificado = @verificado
-        WHERE identificador = @id AND cliente = @cliente
-      `);
-
-    if (result.rowsAffected[0] === 0) {
-      res.status(404).json({ success: false, error: 'Medio de pago no encontrado' });
-      return;
-    }
-
-    res.json({ success: true, data: { mensaje: 'Estado de verificacion actualizado', verificado } });
-  } catch (error) {
-    console.error('Error verificarMedioPago:', error);
     res.status(500).json({ success: false, error: 'Error interno del servidor' });
   }
 }

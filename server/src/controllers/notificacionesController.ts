@@ -62,18 +62,26 @@ export async function createWinnerNotification(
   comision: number,
   costoEnvio: number,
   moneda: string,
+  modoEntrega: 'envio' | 'retiro' = 'envio',
 ): Promise<void> {
   const pool = await connectDB();
   const symbol = moneda === 'USD' ? 'US$' : '$';
   const total = importe + comision + costoEnvio;
 
+  const lineaEntrega = modoEntrega === 'retiro'
+    ? 'Retiro personal: SIN costo de envio y SIN cobertura de seguro.'
+    : `Costo de envio: ${symbol} ${costoEnvio.toFixed(2)}`;
+  const lineaSeguro = modoEntrega === 'retiro'
+    ? 'Elegiste retiro personal: el bien viaja sin la cobertura del seguro.'
+    : 'Envio a tu direccion con cobertura de seguro. (El retiro personal pierde el seguro.)';
+
   const mensaje = [
     `Importe pujado: ${symbol} ${importe.toFixed(2)}`,
     `Comisiones: ${symbol} ${comision.toFixed(2)}`,
-    `Costo de envio: ${symbol} ${costoEnvio.toFixed(2)}`,
+    lineaEntrega,
     `Total a pagar: ${symbol} ${total.toFixed(2)}`,
     '',
-    'Puede retirar personalmente el bien, pero en ese caso pierde la cobertura del seguro.',
+    lineaSeguro,
   ].join('\n');
 
   await pool.request()

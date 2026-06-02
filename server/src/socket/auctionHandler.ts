@@ -4,6 +4,7 @@ import sql from 'mssql';
 import { connectDB } from '../models/db';
 import { AuthPayload } from '../middleware/auth';
 import { createWinnerNotification } from '../controllers/notificacionesController';
+import { recalcularCategoria } from '../services/categoryService';
 import { canParticipateInAuction } from '../utils/category';
 import { getJwtSecret } from '../config/env';
 
@@ -48,6 +49,17 @@ const pendingPayments = new Map<number, {
 
 const LAST_BID_CLOSE_MS = 15_000;
 const NO_BID_AUTO_BUY_MS = 60 * 60 * 1000;
+
+// W6: mensajes por codigo de bloqueo de puja. El frontend usa el code para la UI;
+// este texto es el fallback legible.
+export const BID_REASON_MESSAGES: Record<string, string> = {
+  BLOCKED_INACTIVITY: 'Tu cuenta esta bloqueada',
+  REGISTRATION_INCOMPLETE: 'Tu registro aun no fue admitido por la empresa',
+  UNPAID_PENALTY: 'Tenes multas impagas. Debes abonarlas antes de pujar',
+  CATEGORY_INSUFFICIENT: 'Tu categoria no permite ofertar en esta subasta',
+  PAYMENT_METHOD_MISSING: 'No tenes ningun medio de pago registrado',
+  PAYMENT_METHOD_UNVERIFIED: 'Tu medio de pago esta pendiente de verificacion por la empresa',
+};
 
 function clearItemTimers(itemId: number) {
   const closeTimer = itemCloseTimers.get(itemId);
@@ -315,19 +327,46 @@ export function setupAuctionSocket(io: Server) {
 
         const canBidByCategory = canParticipateInAuction(user.categoria, subasta.recordset[0].categoria);
 
-        // Check if user has verified payment method
-        const medios = await pool.request()
+        // Estado de cuenta y admision revalidados en DB (el token puede estar desactualizado).
+        const accountRow = await pool.request()
           .input('cliente', user.id)
-          .query("SELECT COUNT(*) as count FROM mediosDePago WHERE cliente = @cliente AND verificado = 'si' AND activo = 'si'");
+          .query(`
+            SELECT p.estado, c.admitido
+            FROM personas p
+            INNER JOIN clientes c ON c.identificador = p.identificador
+            WHERE p.identificador = @cliente
+          `);
+        const account = accountRow.recordset[0] || { estado: 'inactivo', admitido: 'no' };
 
-        const canBid = medios.recordset[0].count > 0;
+        // Medios de pago: distinguir "sin medio" de "medio sin verificar" (W6).
+        const mediosRow = await pool.request()
+          .input('cliente', user.id)
+          .query(`
+            SELECT
+              SUM(CASE WHEN activo = 'si' THEN 1 ELSE 0 END) as activos,
+              SUM(CASE WHEN activo = 'si' AND verificado = 'si' THEN 1 ELSE 0 END) as verificados
+            FROM mediosDePago WHERE cliente = @cliente
+          `);
+        const mediosActivos = Number(mediosRow.recordset[0]?.activos || 0);
+        const mediosVerificados = Number(mediosRow.recordset[0]?.verificados || 0);
 
-        // Check for unpaid penalties
+        // Multas impagas.
         const multas = await pool.request()
           .input('cliente', user.id)
           .query("SELECT COUNT(*) as count FROM multas WHERE cliente = @cliente AND pagada = 'no'");
-
         const hasUnpaidPenalty = multas.recordset[0].count > 0;
+
+        // W6: codigo de bloqueo estable (de mas a menos critico) para que el
+        // frontend muestre un mensaje/UI especifico por cada estado.
+        let reasonCode: string | null = null;
+        if (account.estado === 'inactivo') reasonCode = 'BLOCKED_INACTIVITY';
+        else if (account.admitido !== 'si') reasonCode = 'REGISTRATION_INCOMPLETE';
+        else if (hasUnpaidPenalty) reasonCode = 'UNPAID_PENALTY';
+        else if (!canBidByCategory) reasonCode = 'CATEGORY_INSUFFICIENT';
+        else if (mediosActivos === 0) reasonCode = 'PAYMENT_METHOD_MISSING';
+        else if (mediosVerificados === 0) reasonCode = 'PAYMENT_METHOD_UNVERIFIED';
+
+        const canBid = reasonCode === null;
 
         // Join room
         socket.join(`auction-${subastaId}`);
@@ -405,10 +444,9 @@ export function setupAuctionSocket(io: Server) {
         callback({
           success: true,
           data: {
-            canBid: canBidByCategory && canBid && !hasUnpaidPenalty,
-            reason: !canBidByCategory
-              ? 'Tu categoria no permite ofertar en esta subasta'
-              : (hasUnpaidPenalty ? 'Tiene multas impagas' : (!canBid ? 'Sin medio de pago verificado' : null)),
+            canBid,
+            reasonCode,
+            reason: reasonCode ? BID_REASON_MESSAGES[reasonCode] : null,
             currentBid: currentBidData,
             moneda: subasta.recordset[0].moneda,
           },
@@ -730,7 +768,7 @@ export function setupAuctionSocket(io: Server) {
     });
 
     // Winner selects payment method and confirms payment.
-    socket.on('confirm-payment', async (data: { itemId: number; medioPagoId: number }, callback: Function) => {
+    socket.on('confirm-payment', async (data: { itemId: number; medioPagoId: number; modoEntrega?: 'envio' | 'retiro' }, callback: Function) => {
       try {
         const pending = pendingPayments.get(data.itemId);
         if (!pending) {
@@ -769,7 +807,12 @@ export function setupAuctionSocket(io: Server) {
           return;
         }
 
-        const total = +(pending.importe + pending.comision + pending.costoEnvio).toFixed(2);
+        // §125: el retiro personal anula el costo de envio y la cobertura del seguro.
+        const modoEntrega: 'envio' | 'retiro' = data.modoEntrega === 'retiro' ? 'retiro' : 'envio';
+        const costoEnvioFinal = modoEntrega === 'retiro' ? 0 : pending.costoEnvio;
+        const seguroComprador = modoEntrega === 'retiro' ? 'no' : 'si';
+
+        const total = +(pending.importe + pending.comision + costoEnvioFinal).toFixed(2);
         const disponible = parseFloat(mp.montoDisponible || 0);
 
         if (disponible < total) {
@@ -778,32 +821,43 @@ export function setupAuctionSocket(io: Server) {
           fechaLimite.setHours(fechaLimite.getHours() + 72);
           const mensajeMulta = `No posee fondos suficientes para pagar su oferta. Multa aplicada: ${importeMulta.toFixed(2)}. Debe pagarla en 72hs.`;
 
-          // La columna multas.moneda esta garantizada por la migracion 004.
-          await pool.request()
-            .input('cliente', user.id)
-            .input('subasta', pending.subastaId)
-            .input('item', pending.itemId)
-            .input('importeOriginal', pending.importe)
-            .input('importeMulta', importeMulta)
-            .input('fechaLimite', fechaLimite)
-            .input('moneda', pending.moneda)
-            .query(`
-              INSERT INTO multas (cliente, subasta, item, importeOriginal, importeMulta, fechaLimite, moneda)
-              VALUES (@cliente, @subasta, @item, @importeOriginal, @importeMulta, @fechaLimite, @moneda)
-            `);
+          // Multa + notificacion + marcar item: atomico para no dejar multa huerfana
+          // si una de las operaciones falla (review fix). La columna multas.moneda
+          // esta garantizada por la migracion 004.
+          const multaTx = new sql.Transaction(pool);
+          await multaTx.begin();
+          try {
+            await new sql.Request(multaTx)
+              .input('cliente', user.id)
+              .input('subasta', pending.subastaId)
+              .input('item', pending.itemId)
+              .input('importeOriginal', pending.importe)
+              .input('importeMulta', importeMulta)
+              .input('fechaLimite', fechaLimite)
+              .input('moneda', pending.moneda)
+              .query(`
+                INSERT INTO multas (cliente, subasta, item, importeOriginal, importeMulta, fechaLimite, moneda)
+                VALUES (@cliente, @subasta, @item, @importeOriginal, @importeMulta, @fechaLimite, @moneda)
+              `);
 
-          await pool.request()
-            .input('cliente', user.id)
-            .input('titulo', 'Multa por impago')
-            .input('mensaje', mensajeMulta)
-            .query(`
-              INSERT INTO notificaciones (cliente, tipo, titulo, mensaje)
-              VALUES (@cliente, 'multa', @titulo, @mensaje)
-            `);
+            await new sql.Request(multaTx)
+              .input('cliente', user.id)
+              .input('titulo', 'Multa por impago')
+              .input('mensaje', mensajeMulta)
+              .query(`
+                INSERT INTO notificaciones (cliente, tipo, titulo, mensaje)
+                VALUES (@cliente, 'multa', @titulo, @mensaje)
+              `);
 
-          await pool.request()
-            .input('item', pending.itemId)
-            .query("UPDATE itemsCatalogo SET subastado = 'si' WHERE identificador = @item");
+            await new sql.Request(multaTx)
+              .input('item', pending.itemId)
+              .query("UPDATE itemsCatalogo SET subastado = 'si' WHERE identificador = @item");
+
+            await multaTx.commit();
+          } catch (txErr) {
+            try { await multaTx.rollback(); } catch { /* ya revertida */ }
+            throw txErr;
+          }
 
           if (activeItems.get(pending.subastaId) === pending.itemId) {
             activeItems.delete(pending.subastaId);
@@ -826,48 +880,73 @@ export function setupAuctionSocket(io: Server) {
           return;
         }
 
-        await pool.request()
-          .input('medioId', data.medioPagoId)
-          .input('total', total)
-          .query('UPDATE mediosDePago SET montoDisponible = montoDisponible - @total WHERE identificador = @medioId');
-
-        await pool.request()
-          .input('pujoId', pending.pujoId)
-          .query("UPDATE pujos SET ganador = 'si' WHERE identificador = @pujoId");
-
-        await pool.request()
-          .input('item', pending.itemId)
-          .query("UPDATE itemsCatalogo SET subastado = 'si' WHERE identificador = @item");
-
-        const duenioWinner = await pool.request()
-          .input('cliente', user.id)
-          .query('SELECT identificador FROM duenios WHERE identificador = @cliente');
-        if (duenioWinner.recordset.length === 0) {
-          const verificador = await pool.request()
-            .query('SELECT TOP 1 identificador FROM empleados ORDER BY identificador');
-          const verificadorId = verificador.recordset.length > 0 ? verificador.recordset[0].identificador : null;
-          await pool.request()
-            .input('identificador', user.id)
-            .input('verificador', verificadorId)
-            .query('INSERT INTO duenios (identificador, verificador) VALUES (@identificador, @verificador)');
+        // Verificador (empleado) requerido por la FK de duenios. El seed de la
+        // migracion 011 garantiza al menos un empleado; validamos defensivamente.
+        const verificadorRow = await pool.request()
+          .query('SELECT TOP 1 identificador FROM empleados ORDER BY identificador');
+        const verificadorId = verificadorRow.recordset.length > 0 ? verificadorRow.recordset[0].identificador : null;
+        if (verificadorId === null) {
+          callback({ success: false, error: 'No hay empleados configurados en el sistema' });
+          return;
         }
 
-        await pool.request()
-          .input('producto', pending.productoId)
-          .input('duenio', user.id)
-          .query('UPDATE productos SET duenio = @duenio WHERE identificador = @producto');
+        // Pago atomico: descuento de fondos, ganador, item vendido, alta de duenio,
+        // transferencia de propiedad y registro de venta van en una sola transaccion
+        // para no dejar estados inconsistentes ante un fallo parcial (review fix).
+        const payTx = new sql.Transaction(pool);
+        await payTx.begin();
+        try {
+          await new sql.Request(payTx)
+            .input('medioId', data.medioPagoId)
+            .input('total', total)
+            .query('UPDATE mediosDePago SET montoDisponible = montoDisponible - @total WHERE identificador = @medioId');
 
-        await pool.request()
-          .input('subasta', pending.subastaId)
-          .input('duenio', pending.duenioId)
-          .input('producto', pending.productoId)
-          .input('cliente', user.id)
-          .input('importe', pending.importe)
-          .input('comision', pending.comision)
-          .query(`
-            INSERT INTO registroDeSubasta (subasta, duenio, producto, cliente, importe, comision)
-            VALUES (@subasta, @duenio, @producto, @cliente, @importe, @comision)
-          `);
+          await new sql.Request(payTx)
+            .input('pujoId', pending.pujoId)
+            .query("UPDATE pujos SET ganador = 'si' WHERE identificador = @pujoId");
+
+          await new sql.Request(payTx)
+            .input('item', pending.itemId)
+            .query("UPDATE itemsCatalogo SET subastado = 'si' WHERE identificador = @item");
+
+          // Alta del comprador como duenio (idempotente y atomica: evita la carrera
+          // check-then-insert si gana y paga dos items casi simultaneamente).
+          await new sql.Request(payTx)
+            .input('identificador', user.id)
+            .input('verificador', verificadorId)
+            .query(`
+              INSERT INTO duenios (identificador, verificador)
+              SELECT @identificador, @verificador
+              WHERE NOT EXISTS (SELECT 1 FROM duenios WHERE identificador = @identificador)
+            `);
+
+          // TPO §118: el ganador pasa a ser el NUEVO dueno de la pieza. El vendedor
+          // original queda registrado en registroDeSubasta.duenio (historico).
+          await new sql.Request(payTx)
+            .input('producto', pending.productoId)
+            .input('duenio', user.id)
+            .query('UPDATE productos SET duenio = @duenio WHERE identificador = @producto');
+
+          await new sql.Request(payTx)
+            .input('subasta', pending.subastaId)
+            .input('duenio', pending.duenioId)
+            .input('producto', pending.productoId)
+            .input('cliente', user.id)
+            .input('importe', pending.importe)
+            .input('comision', pending.comision)
+            .input('modoEntrega', modoEntrega)
+            .input('costoEnvio', costoEnvioFinal)
+            .input('seguroComprador', seguroComprador)
+            .query(`
+              INSERT INTO registroDeSubasta (subasta, duenio, producto, cliente, importe, comision, modoEntrega, costoEnvio, seguroComprador)
+              VALUES (@subasta, @duenio, @producto, @cliente, @importe, @comision, @modoEntrega, @costoEnvio, @seguroComprador)
+            `);
+
+          await payTx.commit();
+        } catch (txErr) {
+          try { await payTx.rollback(); } catch { /* ya revertida */ }
+          throw txErr;
+        }
 
         io.to(`auction-${pending.subastaId}`).emit('item-sold', {
           itemId: pending.itemId,
@@ -875,16 +954,20 @@ export function setupAuctionSocket(io: Server) {
           ganadorNombre: pending.ganadorNombre,
           importe: pending.importe,
           comision: pending.comision,
-          costoEnvio: pending.costoEnvio,
+          costoEnvio: costoEnvioFinal,
+          modoEntrega,
         });
 
-        await createWinnerNotification(user.id, pending.importe, pending.comision, pending.costoEnvio, pending.moneda);
+        await createWinnerNotification(user.id, pending.importe, pending.comision, costoEnvioFinal, pending.moneda, modoEntrega);
+
+        // TPO §53: la actividad (ganar) puede mejorar la categoria del cliente. No bloquea el pago.
+        recalcularCategoria(user.id).catch((e) => console.error('Error recalculando categoria:', e));
 
         // REQ-07/BLOG-04: continuar con el siguiente item; cerrar solo si no quedan.
         await advanceOrCloseAuction(io, pending.subastaId);
 
         pendingPayments.delete(data.itemId);
-        callback({ success: true, data: { totalPagado: total } });
+        callback({ success: true, data: { totalPagado: total, modoEntrega, costoEnvio: costoEnvioFinal } });
       } catch (error) {
         console.error('Error confirm-payment:', error);
         callback({ success: false, error: 'No se pudo confirmar el pago' });

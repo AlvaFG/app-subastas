@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { body } from 'express-validator';
-import { registerStep1, registerStep2, login, refreshToken, logout, getMe } from '../controllers/authController';
+import { registerStep1, registerStep2, login, adminLogin, refreshToken, logout, getMe } from '../controllers/authController';
 import { authGuard } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 
@@ -36,6 +36,14 @@ router.post('/login',
   body('clave').notEmpty().withMessage('Clave requerida'),
   validate,
   login,
+);
+
+// Login administrativo (empleado/admin)
+router.post('/admin/login',
+  body('email').isEmail().withMessage('Email invalido'),
+  body('clave').notEmpty().withMessage('Clave requerida'),
+  validate,
+  adminLogin,
 );
 
 // Refresh token

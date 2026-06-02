@@ -8,7 +8,7 @@ const options: swaggerJsdoc.Options = {
     info: {
       title: 'Sistema de Subastas — API',
       version: '1.0.0',
-      description: 'API REST para el sistema de subastas (TPO DA1). Incluye autenticación JWT, gestión de subastas, pujas en tiempo real via Socket.IO, medios de pago, venta de items, multas, estadísticas y notificaciones.',
+      description: 'API REST para el sistema de subastas (TPO DA1). Incluye autenticación JWT (cliente y empleado/admin), capa administrativa (admisión de clientes, categorías, verificación de medios de pago, respuesta a solicitudes de venta, multas), gestión de subastas, medios de pago, venta de items, multas, estadísticas y notificaciones.\n\n**Pujas en tiempo real (Socket.IO):** los eventos de la subasta en vivo (join-auction, place-bid, new-bid, you-won, confirm-payment, etc.) NO son endpoints REST. Su contrato (payloads, auth y errores) está documentado en `server/docs/SOCKET_EVENTS.md`.',
       contact: { name: 'DA1 TPO' },
     },
     servers: [
@@ -68,6 +68,7 @@ const options: swaggerJsdoc.Options = {
             moneda: { type: 'string', enum: ['ARS', 'USD'] },
             capacidadAsistentes: { type: 'integer' },
             subastadorNombre: { type: 'string' },
+            tematica: { type: 'string', nullable: true, description: 'Tematica/descripcion del catalogo de la subasta' },
             totalItems: { type: 'integer' },
           },
         },
@@ -112,6 +113,7 @@ const options: swaggerJsdoc.Options = {
             fechaMulta: { type: 'string', format: 'date-time' },
             fechaLimite: { type: 'string', format: 'date-time', description: '72hs desde la multa' },
             derivadaJusticia: { type: 'string', enum: ['si', 'no'] },
+            moneda: { type: 'string', enum: ['ARS', 'USD'], default: 'ARS' },
           },
         },
         SolicitudVenta: {
@@ -120,12 +122,14 @@ const options: swaggerJsdoc.Options = {
             identificador: { type: 'integer' },
             descripcion: { type: 'string' },
             datosHistoricos: { type: 'string', nullable: true },
-            estado: { type: 'string', enum: ['pendiente', 'aceptada', 'rechazada'] },
+            estado: { type: 'string', enum: ['pendiente', 'en_inspeccion', 'aceptada', 'rechazada', 'devuelta'] },
             motivoRechazo: { type: 'string', nullable: true },
             fechaSolicitud: { type: 'string', format: 'date-time' },
-            valorBase: { type: 'number', nullable: true },
-            comisionPropuesta: { type: 'number', nullable: true },
+            valorBase: { type: 'number', nullable: true, description: 'Precio base definido por la empresa al aceptar' },
+            comisionPropuesta: { type: 'number', nullable: true, description: 'Comision definida por la empresa al aceptar' },
             aceptadoPorUsuario: { type: 'string', enum: ['si', 'no'], nullable: true },
+            gastosDevolucion: { type: 'number', nullable: true, description: 'Cargo de devolucion si el usuario rechaza las condiciones' },
+            origenLicito: { type: 'string', enum: ['si', 'no'], nullable: true, description: 'El vendedor declara poder acreditar el origen licito' },
           },
         },
         Notificacion: {
@@ -293,6 +297,36 @@ const options: swaggerJsdoc.Options = {
           },
         },
       },
+      '/api/auth/admin/login': {
+        post: {
+          tags: ['Auth'],
+          summary: 'Login de empleado/admin',
+          description: 'Autentica a un empleado contra la tabla empleados. Emite un access token con claim `rol` (operador|supervisor|admin) para acceder a /api/admin/*. No genera refresh token.',
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['email', 'clave'],
+                  properties: {
+                    email: { type: 'string', format: 'email', example: 'admin@subastas.com' },
+                    clave: { type: 'string', example: 'Admin1234' },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            '200': {
+              description: 'Login admin exitoso',
+              content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, data: { type: 'object', properties: { accessToken: { type: 'string' }, user: { type: 'object', properties: { id: { type: 'integer' }, nombre: { type: 'string' }, email: { type: 'string' }, rol: { type: 'string', enum: ['operador', 'supervisor', 'admin'] } } } } } } } } },
+            },
+            '401': { description: 'Unauthorized — Credenciales inválidas' },
+            '403': { description: 'Forbidden — Cuenta bloqueada' },
+          },
+        },
+      },
       '/api/auth/refresh': {
         post: {
           tags: ['Auth'],
@@ -328,6 +362,96 @@ const options: swaggerJsdoc.Options = {
             '401': { description: 'Unauthorized — Token no proporcionado o inválido' },
             '404': { description: 'Not Found — Usuario no encontrado' },
           },
+        },
+      },
+
+      // ── ADMIN (capa empresa/empleado; requiere token con rol) ──
+      '/api/admin/clientes': {
+        get: {
+          tags: ['Admin'],
+          summary: 'Listar clientes (admision)',
+          description: 'Requiere token de empleado (rol). Filtra por estado de admision.',
+          security: [{ bearerAuth: [] }],
+          parameters: [{ name: 'admitido', in: 'query', schema: { type: 'string', enum: ['si', 'no'] } }],
+          responses: { '200': { description: 'Lista de clientes' }, '401': { description: 'Unauthorized' }, '403': { description: 'Forbidden — Requiere rol administrativo' } },
+        },
+      },
+      '/api/admin/clientes/{id}/admitir': {
+        patch: {
+          tags: ['Admin'],
+          summary: 'Admitir o rechazar un cliente y asignar categoria',
+          security: [{ bearerAuth: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }],
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['admitido'], properties: { admitido: { type: 'string', enum: ['si', 'no'] }, categoria: { type: 'string', enum: ['comun', 'especial', 'plata', 'oro', 'platino'] } } } } } },
+          responses: { '200': { description: 'Cliente actualizado' }, '400': { description: 'Datos invalidos' }, '403': { description: 'Forbidden' }, '404': { description: 'No encontrado' } },
+        },
+      },
+      '/api/admin/clientes/{id}/categoria': {
+        patch: {
+          tags: ['Admin'],
+          summary: 'Asignar categoria a un cliente',
+          security: [{ bearerAuth: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }],
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['categoria'], properties: { categoria: { type: 'string', enum: ['comun', 'especial', 'plata', 'oro', 'platino'] } } } } } },
+          responses: { '200': { description: 'Categoria asignada' }, '400': { description: 'Categoria invalida' }, '403': { description: 'Forbidden' }, '404': { description: 'No encontrado' } },
+        },
+      },
+      '/api/admin/medios-pago': {
+        get: {
+          tags: ['Admin'],
+          summary: 'Listar medios de pago para verificar',
+          security: [{ bearerAuth: [] }],
+          parameters: [{ name: 'verificado', in: 'query', schema: { type: 'string', enum: ['si', 'no'] } }],
+          responses: { '200': { description: 'Lista de medios' }, '403': { description: 'Forbidden' } },
+        },
+      },
+      '/api/admin/medios-pago/{id}/verificar': {
+        put: {
+          tags: ['Admin'],
+          summary: 'Verificar un medio de pago (empresa)',
+          description: 'A6: solo la empresa verifica medios. Reemplaza la auto-verificacion del usuario.',
+          security: [{ bearerAuth: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }],
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['verificado'], properties: { verificado: { type: 'string', enum: ['si', 'no'] } } } } } },
+          responses: { '200': { description: 'Verificacion actualizada' }, '403': { description: 'Forbidden' }, '404': { description: 'No encontrado' } },
+        },
+      },
+      '/api/admin/venta/solicitudes': {
+        get: {
+          tags: ['Admin'],
+          summary: 'Listar solicitudes de venta',
+          security: [{ bearerAuth: [] }],
+          parameters: [{ name: 'estado', in: 'query', schema: { type: 'string', enum: ['pendiente', 'en_inspeccion', 'aceptada', 'rechazada', 'devuelta'] } }],
+          responses: { '200': { description: 'Lista de solicitudes' }, '403': { description: 'Forbidden' } },
+        },
+      },
+      '/api/admin/venta/solicitudes/{id}/inspeccionar': {
+        put: {
+          tags: ['Admin'],
+          summary: 'Marcar una solicitud en inspeccion',
+          security: [{ bearerAuth: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }],
+          responses: { '200': { description: 'En inspeccion' }, '403': { description: 'Forbidden' }, '404': { description: 'No encontrada o no pendiente' } },
+        },
+      },
+      '/api/admin/venta/solicitudes/{id}/respuesta': {
+        put: {
+          tags: ['Admin'],
+          summary: 'Responder una solicitud (la empresa define precio base y comision)',
+          security: [{ bearerAuth: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }],
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['acepta'], properties: { acepta: { type: 'string', enum: ['si', 'no'] }, valorBase: { type: 'number' }, comision: { type: 'number' }, motivoRechazo: { type: 'string' } } } } } },
+          responses: { '200': { description: 'Solicitud respondida' }, '400': { description: 'Datos invalidos' }, '403': { description: 'Forbidden' }, '404': { description: 'No encontrada o ya respondida' } },
+        },
+      },
+      '/api/admin/multas': {
+        post: {
+          tags: ['Admin'],
+          summary: 'Aplicar una multa manualmente (empresa)',
+          description: 'A7: alta de multa por impago (10% del importe). Reemplaza el POST /multas publico.',
+          security: [{ bearerAuth: [] }],
+          requestBody: { required: true, content: { 'application/json': { schema: { type: 'object', required: ['cliente', 'subasta', 'item', 'importeOriginal'], properties: { cliente: { type: 'integer' }, subasta: { type: 'integer' }, item: { type: 'integer' }, importeOriginal: { type: 'number', example: 5000 }, moneda: { type: 'string', enum: ['ARS', 'USD'] } } } } } },
+          responses: { '201': { description: 'Multa aplicada' }, '400': { description: 'Datos invalidos' }, '403': { description: 'Forbidden' } },
         },
       },
 
@@ -503,33 +627,8 @@ const options: swaggerJsdoc.Options = {
             '401': { description: 'Unauthorized' },
           },
         },
-        post: {
-          tags: ['Multas'],
-          summary: 'Crear multa (uso interno)',
-          description: 'Crea multa del 10% sobre el importe original. La multa se aplica al usuario autenticado. Deadline de 72hs.',
-          security: [{ bearerAuth: [] }],
-          requestBody: {
-            required: true,
-            content: {
-              'application/json': {
-                schema: {
-                  type: 'object',
-                  required: ['subasta', 'item', 'importeOriginal'],
-                  properties: {
-                    subasta: { type: 'integer' },
-                    item: { type: 'integer' },
-                    importeOriginal: { type: 'number', example: 5000 },
-                  },
-                },
-              },
-            },
-          },
-          responses: {
-            '201': { description: 'Multa creada', content: { 'application/json': { schema: { type: 'object', properties: { success: { type: 'boolean' }, data: { type: 'object', properties: { importeMulta: { type: 'number', example: 500 }, fechaLimite: { type: 'string', format: 'date-time' } } } } } } } },
-            '401': { description: 'Unauthorized' },
-            '500': { description: 'Internal Server Error' },
-          },
-        },
+        // A7: el POST /multas publico se removio. Las multas las genera el sistema
+        // (socket confirm-payment) o la empresa via POST /api/admin/multas.
       },
 
       '/api/multas/{id}/pagar': {
@@ -778,7 +877,8 @@ const options: swaggerJsdoc.Options = {
     },
 
     tags: [
-      { name: 'Auth', description: 'Registro, login y gestión de sesión (JWT)' },
+      { name: 'Auth', description: 'Registro, login (cliente y admin) y gestión de sesión (JWT)' },
+      { name: 'Admin', description: 'Capa empresa/empleado: admisión de clientes, categorías, verificación de medios, respuesta a solicitudes de venta y multas' },
       { name: 'Subastas', description: 'Listado, catálogos y detalle de items' },
       { name: 'Medios de Pago', description: 'CRUD de medios de pago del usuario' },
       { name: 'Multas', description: 'Penalizaciones por impago (10%, 72hs deadline)' },
