@@ -7,6 +7,7 @@ import morgan from 'morgan';
 import dotenv from 'dotenv';
 import { connectDB } from './models/db';
 import authRoutes from './routes/auth';
+import adminRoutes from './routes/admin';
 import mediosPagoRoutes from './routes/mediosPago';
 import subastasRoutes from './routes/subastas';
 import multasRoutes from './routes/multas';
@@ -62,6 +63,7 @@ app.get('/api/health', async (_req, res) => {
 
 // Routes
 app.use('/api/auth', authLimiter, authRoutes);
+app.use('/api/admin', adminRoutes);
 app.use('/api/medios-pago', mediosPagoRoutes);
 app.use('/api/subastas', subastasRoutes);
 app.use('/api/multas', multasRoutes);

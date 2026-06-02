@@ -8,7 +8,7 @@ export function getCategoryLevel(category?: string | null): number {
   return CATEGORY_ORDER.indexOf(category as AuctionCategory);
 }
 
-export function canParticipateInAuction(userCategory: string, auctionCategory: string): boolean {
+export function canParticipateInAuction(userCategory?: string | null, auctionCategory?: string | null): boolean {
   const userLevel = getCategoryLevel(userCategory);
   const auctionLevel = getCategoryLevel(auctionCategory);
 

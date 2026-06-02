@@ -8,9 +8,13 @@ dotenv.config();
 export interface AuthPayload {
   id: number;
   email: string;
-  categoria: string;
-  admitido: string;
+  categoria?: string;
+  admitido?: string;
+  // Presente solo en tokens de empleado/admin (POST /auth/admin/login).
+  rol?: string;
 }
+
+export const ADMIN_ROLES = ['operador', 'supervisor', 'admin'] as const;
 
 export interface AuthRequest extends Request {
   user?: AuthPayload;
@@ -71,6 +75,24 @@ export function categoryGuard(minCategory: string) {
 
     if (userLevel < requiredLevel) {
       res.status(403).json({ success: false, error: 'Categoria insuficiente' });
+      return;
+    }
+
+    next();
+  };
+}
+
+// Capa administrativa (A5/A6/A7/A9): exige un token de empleado con rol permitido.
+// Los tokens de cliente no llevan `rol`, por lo que quedan excluidos.
+export function adminGuard(roles: readonly string[] = ADMIN_ROLES) {
+  return (req: AuthRequest, res: Response, next: NextFunction): void => {
+    if (!req.user) {
+      res.status(401).json({ success: false, error: 'No autenticado' });
+      return;
+    }
+
+    if (!req.user.rol || !roles.includes(req.user.rol)) {
+      res.status(403).json({ success: false, error: 'Requiere rol administrativo' });
       return;
     }
 

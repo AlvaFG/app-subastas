@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { body } from 'express-validator';
-import { getMediosPago, createMedioPago, updateMedioPago, verificarMedioPago, updateSaldoMedioPago, deleteMedioPago } from '../controllers/mediosPagoController';
+import { getMediosPago, createMedioPago, updateMedioPago, updateSaldoMedioPago, deleteMedioPago } from '../controllers/mediosPagoController';
 import { authGuard } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 
@@ -18,11 +18,8 @@ router.post('/',
   createMedioPago,
 );
 
-router.put('/:id/verificar',
-  body('verificado').isIn(['si', 'no']).withMessage('Verificado invalido'),
-  validate,
-  verificarMedioPago,
-);
+// A6: la verificacion de medios la realiza la empresa via PUT /api/admin/medios-pago/:id/verificar
+// (rol empleado/admin). El usuario ya no puede auto-verificar su propio medio.
 
 router.put('/:id/saldo',
   body('monto').isFloat().withMessage('Monto invalido'),
