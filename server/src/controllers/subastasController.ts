@@ -15,6 +15,9 @@ export async function getSubastas(req: Request, res: Response): Promise<void> {
       SELECT s.identificador, s.fecha, s.hora, s.estado, s.ubicacion,
              s.categoria, s.moneda, s.capacidadAsistentes,
              p.nombre as subastadorNombre,
+             (SELECT TOP 1 c.descripcion FROM catalogos c
+              WHERE c.subasta = s.identificador
+              ORDER BY c.identificador) as tematica,
              (SELECT COALESCE(SUM(CASE WHEN paCount.cantidad > 0 THEN paCount.cantidad ELSE 1 END), 0)
               FROM itemsCatalogo ic
               INNER JOIN catalogos c ON c.identificador = ic.catalogo
