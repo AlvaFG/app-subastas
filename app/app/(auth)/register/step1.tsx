@@ -19,6 +19,7 @@ export default function RegisterStep1Screen() {
   const [loading, setLoading] = useState(false);
   const [showCountryList, setShowCountryList] = useState(false);
   const [selectedCountry, setSelectedCountry] = useState<string | null>(null);
+  const [enviado, setEnviado] = useState(false);
   const registerStep1 = useAuthStore((s) => s.registerStep1);
 
   const pickImage = async (side: 'frente' | 'dorso') => {
@@ -41,7 +42,7 @@ export default function RegisterStep1Screen() {
     }
     setLoading(true);
     try {
-      const id = await registerStep1({
+      await registerStep1({
         documento,
         nombre,
         apellido,
@@ -50,13 +51,28 @@ export default function RegisterStep1Screen() {
         fotoFrente,
         fotoDorso,
       });
-      router.replace(`/(auth)/register/step2?identificador=${id}`);
+      // A5: el cliente queda PENDIENTE de admision por la empresa. No avanza a la
+      // etapa 2 hasta ser admitido (step2 devolveria 403). Mostramos el estado.
+      setEnviado(true);
     } catch (err: any) {
       setError(err.response?.data?.error || 'Error al registrar');
     } finally {
       setLoading(false);
     }
   };
+
+  if (enviado) {
+    return (
+      <View style={styles.pendingContainer}>
+        <Text style={styles.title}>Registro recibido</Text>
+        <Text style={styles.pendingText}>
+          La empresa revisara tus datos. Cuando seas admitido podras ingresar a la app
+          para crear tu clave y completar la etapa 2.
+        </Text>
+        <Button title="Volver al inicio" size="lg" onPress={() => router.replace('/(auth)/login')} />
+      </View>
+    );
+  }
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -110,6 +126,8 @@ export default function RegisterStep1Screen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.ivory },
   content: { padding: spacing.lg, paddingBottom: spacing['3xl'] },
+  pendingContainer: { flex: 1, backgroundColor: colors.ivory, padding: spacing.lg, justifyContent: 'center', gap: spacing.md },
+  pendingText: { fontFamily: fonts.body, fontSize: fontSizes.base, color: colors.textSecondary, lineHeight: 24 },
   title: { fontFamily: fonts.display, fontSize: fontSizes['2xl'], color: colors.textPrimary, marginBottom: spacing.xs },
   subtitle: { fontFamily: fonts.body, fontSize: fontSizes.base, color: colors.textSecondary, marginBottom: spacing.lg },
   sectionTitle: { fontFamily: fonts.headingSemibold, fontSize: fontSizes.lg, color: colors.textPrimary, marginTop: spacing.md, marginBottom: spacing.sm },

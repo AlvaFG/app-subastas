@@ -24,6 +24,7 @@ interface Solicitud {
   valorBase: number | null;
   comisionPropuesta: number | null;
   motivoRechazo: string | null;
+  gastosDevolucion: number | null;
   aceptadoPorUsuario: string | null;
   depositoNombre: string | null;
   depositoDireccion: string | null;
@@ -59,12 +60,12 @@ export default function VenderScreen() {
   const [datosHistoricos, setDatosHistoricos] = useState('');
   const [precioBase, setPrecioBase] = useState('');
   const [moneda, setMoneda] = useState<'ARS' | 'USD'>('ARS');
-  const [horaSubasta, setHoraSubasta] = useState('10:00');
   const [esObraDisenador, setEsObraDisenador] = useState(false);
   const [nombreArtistaDisenador, setNombreArtistaDisenador] = useState('');
   const [fechaObjeto, setFechaObjeto] = useState('');
   const [historiaObjeto, setHistoriaObjeto] = useState('');
   const [declaracion, setDeclaracion] = useState(false);
+  const [origenLicito, setOrigenLicito] = useState(false);
   const [articulos, setArticulos] = useState<ArticuloSolicitud[]>([
     { id: 'articulo-1', descripcion: '', fotos: [] },
   ]);
@@ -154,8 +155,7 @@ export default function VenderScreen() {
     if (articulos.some((articulo) => articulo.fotos.length === 0)) { Alert.alert('Error', 'Cada articulo debe tener al menos una foto'); return; }
     const totalFotos = articulos.reduce((acumulado, articulo) => acumulado + articulo.fotos.length, 0);
     if (totalFotos < 6) { Alert.alert('Error', `Debe subir al menos 6 fotos en total (tiene ${totalFotos})`); return; }
-    if (!precioBase) { Alert.alert('Error', 'Ingrese un precio base'); return; }
-    if (!/^\d{2}:\d{2}$/.test(horaSubasta)) { Alert.alert('Error', 'Ingrese una hora valida (HH:mm)'); return; }
+    if (!precioBase) { Alert.alert('Error', 'Ingrese un precio base sugerido'); return; }
     if (esObraDisenador && !nombreArtistaDisenador.trim()) { Alert.alert('Error', 'Ingrese nombre de artista/diseniador'); return; }
     if (!declaracion) { Alert.alert('Error', 'Debe declarar que el bien le pertenece'); return; }
 
@@ -166,7 +166,6 @@ export default function VenderScreen() {
         datosHistoricos: datosHistoricos || null,
         valorBase: parseFloat(precioBase),
         moneda,
-        horaSubasta,
         esObraDisenador: esObraDisenador ? 'si' : 'no',
         nombreArtistaDisenador: esObraDisenador ? nombreArtistaDisenador : null,
         fechaObjeto: esObraDisenador ? (fechaObjeto || null) : null,
@@ -176,13 +175,13 @@ export default function VenderScreen() {
           fotos: articulo.fotos.map((foto) => foto.base64),
         })),
         declaracionPropiedad: 'si',
+        origenLicito: origenLicito ? 'si' : 'no',
       });
-      Alert.alert('Solicitud enviada', 'La solicitud se aceptara automaticamente en 30 segundos.');
+      Alert.alert('Solicitud enviada', 'La empresa revisara tu solicitud y definira el precio base y la comision. Veras el estado en "Mis Solicitudes".');
       setDescripcion('');
       setDatosHistoricos('');
       setPrecioBase('');
       setMoneda('ARS');
-      setHoraSubasta('10:00');
       setEsObraDisenador(false);
       setNombreArtistaDisenador('');
       setFechaObjeto('');
@@ -249,9 +248,21 @@ export default function VenderScreen() {
     }
   };
 
+  const estadoLabel = (estado: string) => {
+    switch (estado) {
+      case 'pendiente': return 'PENDIENTE';
+      case 'en_inspeccion': return 'EN INSPECCION';
+      case 'aceptada': return 'ACEPTADA (condiciones)';
+      case 'rechazada': return 'RECHAZADA';
+      case 'devuelta': return 'DEVUELTA';
+      default: return estado.toUpperCase();
+    }
+  };
+
   const estadoColor = (estado: string) => {
     switch (estado) {
       case 'pendiente': return colors.steelBlue;
+      case 'en_inspeccion': return colors.auctionGold;
       case 'aceptada': return colors.bidGreen;
       case 'rechazada': return colors.alertEmber;
       case 'devuelta': return colors.textMuted;
@@ -297,7 +308,7 @@ export default function VenderScreen() {
             multiline
           />
           <Input
-            label="Precio base"
+            label="Precio base sugerido (la empresa define el definitivo)"
             placeholder="Ej: 5000"
             value={precioBase}
             onChangeText={setPrecioBase}
@@ -319,13 +330,6 @@ export default function VenderScreen() {
               <Text style={[styles.currencyText, moneda === 'USD' && styles.currencyTextActive]}>Dolares (USD)</Text>
             </TouchableOpacity>
           </View>
-
-          <Input
-            label="Hora de la subasta (definida por el vendedor)"
-            placeholder="HH:mm"
-            value={horaSubasta}
-            onChangeText={setHoraSubasta}
-          />
 
           <View style={styles.declarationRow}>
             <Switch
@@ -414,6 +418,19 @@ export default function VenderScreen() {
             </Text>
           </View>
 
+          {/* TPO §166-168: acreditacion de origen licito */}
+          <View style={styles.declarationRow}>
+            <Switch
+              value={origenLicito}
+              onValueChange={setOrigenLicito}
+              trackColor={{ true: colors.auctionGold, false: colors.border }}
+              thumbColor={colors.ivory}
+            />
+            <Text style={styles.declarationText}>
+              Puedo acreditar el origen licito del bien si la empresa lo requiere
+            </Text>
+          </View>
+
           <Button title="Enviar Solicitud" onPress={handleSubmit} loading={loading} size="lg" />
         </ScrollView>
       ) : (
@@ -430,7 +447,7 @@ export default function VenderScreen() {
                 <Text style={styles.solicitudDesc} numberOfLines={2}>{item.descripcion}</Text>
                 <View style={[styles.estadoDot, { backgroundColor: estadoColor(item.estado) }]} />
               </View>
-              <Text style={styles.solicitudEstado}>{item.estado.toUpperCase()}</Text>
+              <Text style={styles.solicitudEstado}>{estadoLabel(item.estado)}</Text>
               <Text style={styles.solicitudFecha}>
                 {new Date(item.fechaSolicitud).toLocaleDateString('es-AR')}
               </Text>
@@ -454,6 +471,12 @@ export default function VenderScreen() {
 
               {item.estado === 'rechazada' && item.motivoRechazo && (
                 <Text style={styles.rechazoText}>Motivo: {item.motivoRechazo}</Text>
+              )}
+
+              {item.estado === 'devuelta' && (
+                <Text style={styles.rechazoText}>
+                  Bien devuelto con cargo{item.gastosDevolucion ? `: ${formatMoney(item.gastosDevolucion)} (gastos de devolucion)` : ''}.
+                </Text>
               )}
 
               {item.estado === 'aceptada' && item.valorBase && !item.aceptadoPorUsuario && (

@@ -59,10 +59,22 @@ interface SocketAck<T = unknown> {
   code?: string;
 }
 
+// W6: UI por codigo de bloqueo de puja. El color comunica la severidad
+// (rojo = bloqueo duro, gris = condicion del usuario por resolver).
+const REASON_UI: Record<string, { title: string; color: string }> = {
+  BLOCKED_INACTIVITY: { title: 'Cuenta bloqueada', color: colors.alertEmber },
+  UNPAID_PENALTY: { title: 'Multa impaga', color: colors.alertEmber },
+  REGISTRATION_INCOMPLETE: { title: 'Registro pendiente de admision', color: colors.steelBlue },
+  CATEGORY_INSUFFICIENT: { title: 'Categoria insuficiente', color: colors.steelBlue },
+  PAYMENT_METHOD_MISSING: { title: 'Sin medio de pago', color: colors.auctionGold },
+  PAYMENT_METHOD_UNVERIFIED: { title: 'Medio sin verificar', color: colors.auctionGold },
+};
+
 // Respuesta del ack de 'join-auction'.
 interface JoinAuctionData {
   canBid: boolean;
   reason: string | null;
+  reasonCode?: string | null;
   moneda?: string;
   currentBid?: {
     item: CurrentItem;
@@ -102,6 +114,7 @@ export default function LiveAuctionScreen() {
   const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connecting');
   const [canBid, setCanBid] = useState(false);
   const [bidReason, setBidReason] = useState<string | null>(null);
+  const [bidReasonCode, setBidReasonCode] = useState<string | null>(null);
   const [currentItem, setCurrentItem] = useState<CurrentItem | null>(null);
   const [bestBid, setBestBid] = useState<number>(0);
   const [bestBidder, setBestBidder] = useState<string>('');
@@ -112,6 +125,7 @@ export default function LiveAuctionScreen() {
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [wonItem, setWonItem] = useState<WonItem | null>(null);
   const [selectedMedioPagoId, setSelectedMedioPagoId] = useState<number | null>(null);
+  const [modoEntrega, setModoEntrega] = useState<'envio' | 'retiro'>('envio');
   const [closingInMs, setClosingInMs] = useState<number | null>(null);
   const [currentCategory, setCurrentCategory] = useState<string>('comun');
   const [cancellingPayment, setCancellingPayment] = useState(false);
@@ -151,6 +165,7 @@ export default function LiveAuctionScreen() {
         setConnectionStatus('connected');
         setCanBid(data.canBid);
         setBidReason(data.reason);
+        setBidReasonCode(data.reasonCode ?? null);
         setMoneda(data.moneda || 'ARS');
         if (data.currentBid) {
           const item = data.currentBid.item;
@@ -249,6 +264,7 @@ export default function LiveAuctionScreen() {
           if (!mounted) return;
           setWonItem(data);
           setSelectedMedioPagoId(data?.medios?.[0]?.identificador ?? null);
+          setModoEntrega('envio');
           setShowPaymentModal(true);
         });
 
@@ -267,6 +283,7 @@ export default function LiveAuctionScreen() {
           if (!mounted) return;
           setCanBid(false);
           setBidReason('La subasta ya fue cerrada');
+          setBidReasonCode(null);
           setClosingInMs(null);
           Alert.alert('Subasta cerrada', 'La subasta fue cerrada luego del pago final.');
         });
@@ -424,8 +441,10 @@ export default function LiveAuctionScreen() {
     }
     const socket = getSocket();
     if (!socket) return;
-    const total = wonItem.total ?? (wonItem.importe + wonItem.comision + (wonItem.costoEnvio ?? 0));
-    socket.emit('confirm-payment', { itemId: wonItem.itemId, medioPagoId: selectedMedioPagoId }, (response?: SocketAck<unknown>) => {
+    // §125: retiro personal => sin costo de envio (y sin seguro). El total se recalcula.
+    const costoEnvioEfectivo = modoEntrega === 'retiro' ? 0 : (wonItem.costoEnvio ?? 0);
+    const total = wonItem.importe + wonItem.comision + costoEnvioEfectivo;
+    socket.emit('confirm-payment', { itemId: wonItem.itemId, medioPagoId: selectedMedioPagoId, modoEntrega }, (response?: SocketAck<unknown>) => {
       // A5-09: ack ausente -> error en vez de crash.
       if (!response) {
         Alert.alert('Error', 'No se recibio respuesta del servidor.');
@@ -622,6 +641,14 @@ export default function LiveAuctionScreen() {
         </View>
       ) : bidReason ? (
         <View style={styles.bidBarDisabled}>
+          {bidReasonCode && REASON_UI[bidReasonCode] ? (
+            <View style={styles.reasonRow}>
+              <View style={[styles.reasonDot, { backgroundColor: REASON_UI[bidReasonCode].color }]} />
+              <Text style={[styles.reasonTitle, { color: REASON_UI[bidReasonCode].color }]}>
+                {REASON_UI[bidReasonCode].title}
+              </Text>
+            </View>
+          ) : null}
           <Text style={styles.bidBarDisabledText}>{bidReason}</Text>
         </View>
       ) : null}
@@ -644,13 +671,22 @@ export default function LiveAuctionScreen() {
               <Text style={styles.wonLabel}>Comision</Text>
               <Text style={styles.wonValue}>{formatPrice(wonItem.comision)}</Text>
             </View>
-            <View style={styles.wonDetail}>
-              <Text style={styles.wonLabel}>Costo de envio</Text>
-              <Text style={styles.wonValue}>{formatPrice(wonItem.costoEnvio || 0)}</Text>
+            {/* §125: modo de entrega — el retiro personal anula envio y seguro */}
+            <Text style={[styles.wonLabel, { marginTop: spacing.sm }]}>Entrega</Text>
+            <View style={styles.entregaRow}>
+              <Button title="Envio (con seguro)" variant={modoEntrega === 'envio' ? 'primary' : 'outline'} size="sm" onPress={() => setModoEntrega('envio')} style={styles.flexBtn} />
+              <Button title="Retiro (pierde seguro)" variant={modoEntrega === 'retiro' ? 'primary' : 'outline'} size="sm" onPress={() => setModoEntrega('retiro')} style={styles.flexBtn} />
             </View>
             <View style={styles.wonDetail}>
+              <Text style={styles.wonLabel}>Costo de envio</Text>
+              <Text style={styles.wonValue}>{formatPrice(modoEntrega === 'retiro' ? 0 : (wonItem.costoEnvio || 0))}</Text>
+            </View>
+            {modoEntrega === 'retiro' ? (
+              <Text style={styles.seguroWarn}>Retiro personal: el bien pierde la cobertura del seguro.</Text>
+            ) : null}
+            <View style={styles.wonDetail}>
               <Text style={styles.wonLabel}>Total</Text>
-              <Text style={styles.wonValue}>{formatPrice(wonItem.total || (wonItem.importe + wonItem.comision + (wonItem.costoEnvio || 0)))}</Text>
+              <Text style={styles.wonValue}>{formatPrice(wonItem.importe + wonItem.comision + (modoEntrega === 'retiro' ? 0 : (wonItem.costoEnvio || 0)))}</Text>
             </View>
 
             <Text style={[styles.wonLabel, { marginTop: spacing.md }]}>Seleccione medio de pago</Text>
@@ -730,11 +766,17 @@ const styles = StyleSheet.create({
   bidInput: { flex: 1, height: 48, backgroundColor: colors.graphite, borderRadius: radius.md, paddingHorizontal: spacing.md, fontFamily: fonts.body, fontSize: fontSizes.base, color: colors.ivory },
   bidButton: { width: 100 },
 
-  bidBarDisabled: { padding: spacing.md, borderTopWidth: 1, borderTopColor: colors.borderDark, alignItems: 'center' },
-  bidBarDisabledText: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.alertEmber },
+  bidBarDisabled: { padding: spacing.md, borderTopWidth: 1, borderTopColor: colors.borderDark, alignItems: 'center', gap: spacing.xs },
+  bidBarDisabledText: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.textMuted, textAlign: 'center' },
+  reasonRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs },
+  reasonDot: { width: 8, height: 8, borderRadius: 4 },
+  reasonTitle: { fontFamily: fonts.bodySemibold, fontSize: fontSizes.sm },
 
   wonText: { fontFamily: fonts.display, fontSize: fontSizes['2xl'], color: colors.auctionGold, textAlign: 'center', marginBottom: spacing.md },
   wonDetail: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: spacing.sm, borderBottomWidth: 1, borderBottomColor: colors.border },
   wonLabel: { fontFamily: fonts.body, fontSize: fontSizes.base, color: colors.textSecondary },
   wonValue: { fontFamily: fonts.bodySemibold, fontSize: fontSizes.base, color: colors.textPrimary },
+  entregaRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xs },
+  flexBtn: { flex: 1 },
+  seguroWarn: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.alertEmber, marginTop: spacing.xs },
 });

@@ -65,6 +65,13 @@ export default function PerfilScreen() {
       />
 
       <Button
+        title="Mis Multas"
+        variant="secondary"
+        onPress={() => router.push('/multas')}
+        style={{ marginTop: spacing.sm }}
+      />
+
+      <Button
         title="Cerrar Sesion"
         variant="danger"
         onPress={handleLogout}

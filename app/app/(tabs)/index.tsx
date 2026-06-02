@@ -19,6 +19,7 @@ interface Subasta {
   moneda: string;
   totalItems: number;
   subastadorNombre: string;
+  tematica?: string;
   nombrePrimerItem?: string;
   fotoPrimerItem?: string;
 }
@@ -120,10 +121,11 @@ export default function SubastasScreen() {
 
       {/* Content */}
       <View style={styles.cardContent}>
-        {/* Item title */}
-        {item.nombrePrimerItem && (
-          <Text style={styles.itemTitle} numberOfLines={2}>{item.nombrePrimerItem}</Text>
-        )}
+        {/* Tematica de la SUBASTA (W4): el Home lista subastas, no items sueltos */}
+        <Text style={styles.itemTitle} numberOfLines={2}>{item.tematica || 'Subasta'}</Text>
+        {item.nombrePrimerItem ? (
+          <Text style={styles.incluye} numberOfLines={1}>Incluye: {item.nombrePrimerItem}</Text>
+        ) : null}
 
         {/* Header: date/time + estado */}
         <View style={styles.cardHeader}>
@@ -208,7 +210,8 @@ const styles = StyleSheet.create({
   bannerPlaceholderText: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.textMuted },
   badgeOverlay: { position: 'absolute', top: spacing.sm, right: spacing.sm },
   cardContent: { padding: spacing.md },
-  itemTitle: { fontFamily: fonts.headingSemibold, fontSize: fontSizes.lg, color: colors.textPrimary, marginBottom: spacing.sm },
+  itemTitle: { fontFamily: fonts.headingSemibold, fontSize: fontSizes.lg, color: colors.textPrimary, marginBottom: spacing.xs },
+  incluye: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.textSecondary, marginBottom: spacing.sm },
   cardHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: spacing.sm },
   cardHeaderLeft: {},
   cardHeaderRight: { flexDirection: 'row', gap: spacing.sm, alignItems: 'center' },
