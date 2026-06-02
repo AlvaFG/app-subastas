@@ -1,17 +1,14 @@
--- Migration: Add moneda field to multas table
--- This allows tracking which currency the penalty is in
+-- Add moneda field to multas table (DB-03)
+-- Lets penalties be tracked/paid in the auction's currency.
 
-IF NOT EXISTS(
-  SELECT 1 FROM INFORMATION_SCHEMA.COLUMNS
-  WHERE TABLE_NAME='multas' AND COLUMN_NAME='moneda'
-)
-BEGIN
-  ALTER TABLE multas
-  ADD moneda VARCHAR(3) DEFAULT 'ARS';
-  
-  PRINT 'Column moneda added to multas table';
-END
-ELSE
-BEGIN
-  PRINT 'Column moneda already exists in multas table';
-END
+IF COL_LENGTH('multas', 'moneda') IS NULL
+  ALTER TABLE multas ADD moneda VARCHAR(3) CONSTRAINT chkMonedaMulta CHECK (moneda IN ('ARS', 'USD')) DEFAULT 'ARS';
+GO
+
+-- @DOWN
+IF OBJECT_ID('chkMonedaMulta', 'C') IS NOT NULL
+  ALTER TABLE multas DROP CONSTRAINT chkMonedaMulta;
+GO
+IF COL_LENGTH('multas', 'moneda') IS NOT NULL
+  ALTER TABLE multas DROP COLUMN moneda;
+GO

@@ -4,6 +4,8 @@ import { Link, router } from 'expo-router';
 import { Button, Input } from '../../src/components';
 import { colors, fonts, fontSizes, spacing } from '../../src/theme';
 import { useAuthStore } from '../../src/store/authStore';
+import { isValidEmail } from '../../src/utils/validators';
+import { getApiErrorMessage } from '../../src/utils/apiError';
 
 export default function LoginScreen() {
   const [email, setEmail] = useState('');
@@ -18,12 +20,16 @@ export default function LoginScreen() {
       setError('Complete todos los campos');
       return;
     }
+    if (!isValidEmail(email)) {
+      setError('Ingrese un email valido');
+      return;
+    }
     setLoading(true);
     try {
       await login(email, clave);
       router.replace('/(tabs)');
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'Error al iniciar sesion');
+    } catch (err) {
+      setError(getApiErrorMessage(err, 'Error al iniciar sesion'));
     } finally {
       setLoading(false);
     }

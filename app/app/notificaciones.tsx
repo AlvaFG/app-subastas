@@ -5,6 +5,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { colors, fonts, fontSizes, spacing, shadows, radius } from '../src/theme';
 import { useAuthStore } from '../src/store/authStore';
 import api from '../src/services/api';
+import { getApiErrorMessage } from '../src/utils/apiError';
 
 interface Notificacion {
   identificador: number;
@@ -50,6 +51,41 @@ export default function NotificacionesScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
+  const fetchNotificaciones = useCallback(async () => {
+    try {
+      const res = await api.get('/notificaciones');
+      setItems(res.data.data);
+    } catch (e) {
+      if (__DEV__) {
+        console.error('Error fetching notificaciones:', getApiErrorMessage(e));
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  const fetchMultas = useCallback(async () => {
+    try {
+      const res = await api.get('/multas');
+      setMultas(res.data.data || []);
+    } catch (e) {
+      if (__DEV__) {
+        console.error('Error fetching multas:', getApiErrorMessage(e));
+      }
+    }
+  }, []);
+
+  const fetchMediosPago = useCallback(async () => {
+    try {
+      const res = await api.get('/medios-pago');
+      setMediosPago(res.data.data || []);
+    } catch (e) {
+      if (__DEV__) {
+        console.error('Error fetching medios de pago:', getApiErrorMessage(e));
+      }
+    }
+  }, []);
+
   useEffect(() => {
     if (!isAuthenticated) {
       router.replace('/(auth)/login');
@@ -58,49 +94,25 @@ export default function NotificacionesScreen() {
     fetchNotificaciones();
     fetchMultas();
     fetchMediosPago();
-  }, []);
+  }, [isAuthenticated, fetchNotificaciones, fetchMultas, fetchMediosPago]);
 
-  const fetchNotificaciones = async () => {
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
     try {
-      const res = await api.get('/notificaciones');
-      setItems(res.data.data);
-    } catch (e) {
-      console.error('Error fetching notificaciones:', e);
+      await Promise.all([fetchNotificaciones(), fetchMultas(), fetchMediosPago()]);
     } finally {
-      setLoading(false);
       setRefreshing(false);
     }
-  };
-
-  const fetchMultas = async () => {
-    try {
-      const res = await api.get('/multas');
-      setMultas(res.data.data || []);
-    } catch (e) {
-      console.error('Error fetching multas:', e);
-    }
-  };
-
-  const fetchMediosPago = async () => {
-    try {
-      const res = await api.get('/medios-pago');
-      setMediosPago(res.data.data || []);
-    } catch (e) {
-      console.error('Error fetching medios de pago:', e);
-    }
-  };
-
-  const onRefresh = useCallback(() => {
-    setRefreshing(true);
-    Promise.all([fetchNotificaciones(), fetchMultas(), fetchMediosPago()]);
-  }, []);
+  }, [fetchNotificaciones, fetchMultas, fetchMediosPago]);
 
   const marcarLeida = async (id: number) => {
     try {
       await api.put(`/notificaciones/${id}/leer`);
       setItems((prev) => prev.map((n) => (n.identificador === id ? { ...n, leida: 'si' } : n)));
     } catch (e) {
-      console.error('Error marking read:', e);
+      if (__DEV__) {
+        console.error('Error marking read:', getApiErrorMessage(e));
+      }
     }
   };
 

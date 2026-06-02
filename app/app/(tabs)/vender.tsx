@@ -1,13 +1,19 @@
 import React, { useState, useEffect } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, Switch, Alert, FlatList, TouchableOpacity, Image, Modal,
+  View, Text, StyleSheet, ScrollView, Switch, Alert, FlatList, TouchableOpacity, Image,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
-import { Button, Input, Badge } from '../../src/components';
+import { Button, Input, Badge, Modal } from '../../src/components';
 import { colors, fonts, fontSizes, spacing, radius, shadows } from '../../src/theme';
 import api from '../../src/services/api';
 import { useAuthStore } from '../../src/store/authStore';
+import { getApiErrorMessage } from '../../src/utils/apiError';
+import type { MedioPago } from '../../src/types';
 import { router } from 'expo-router';
+
+// Calidad de compresion para fotos tomadas con el ImagePicker (0-1).
+// Valor bajo para reducir el peso del base64 enviado al backend.
+const IMAGE_QUALITY = 0.45;
 
 interface Solicitud {
   identificador: number;
@@ -67,7 +73,7 @@ export default function VenderScreen() {
   // List state
   const [solicitudes, setSolicitudes] = useState<Solicitud[]>([]);
   const [loadingList, setLoadingList] = useState(false);
-  const [medios, setMedios] = useState<any[]>([]);
+  const [medios, setMedios] = useState<MedioPago[]>([]);
   const [modalMediosVisible, setModalMediosVisible] = useState(false);
   const [selectedSolicitudForUpgrade, setSelectedSolicitudForUpgrade] = useState<number | null>(null);
   const [mediosLoading, setMediosLoading] = useState(false);
@@ -113,7 +119,7 @@ export default function VenderScreen() {
       mediaTypes: ['images'],
       allowsMultipleSelection: true,
       base64: true,
-      quality: 0.45,
+      quality: IMAGE_QUALITY,
     });
 
     if (!result.canceled) {
@@ -185,8 +191,8 @@ export default function VenderScreen() {
       setArticulos([{ id: 'articulo-1', descripcion: '', fotos: [] }]);
       setTab('mis');
       fetchSolicitudes();
-    } catch (err: any) {
-      Alert.alert('Error', err.response?.data?.error || 'Error al enviar solicitud');
+    } catch (err) {
+      Alert.alert('Error', getApiErrorMessage(err, 'Error al enviar solicitud'));
     } finally {
       setLoading(false);
     }
@@ -197,8 +203,8 @@ export default function VenderScreen() {
       await api.put(`/venta/solicitudes/${id}/respuesta`, { acepta });
       Alert.alert('Listo', acepta === 'si' ? 'Acepto las condiciones' : 'Rechazo las condiciones');
       fetchSolicitudes();
-    } catch (err: any) {
-      Alert.alert('Error', err.response?.data?.error || 'Error');
+    } catch (err) {
+      Alert.alert('Error', getApiErrorMessage(err, 'Error'));
     }
   };
 
@@ -220,7 +226,7 @@ export default function VenderScreen() {
               const resp = await api.get('/medios-pago');
               setMedios(resp.data.data || []);
             } catch (err) {
-              Alert.alert('Error', 'No se pudieron obtener medios de pago');
+              Alert.alert('Error', getApiErrorMessage(err, 'No se pudieron obtener medios de pago'));
             } finally {
               setMediosLoading(false);
             }
@@ -238,8 +244,8 @@ export default function VenderScreen() {
       setModalMediosVisible(false);
       setSelectedSolicitudForUpgrade(null);
       fetchSolicitudes();
-    } catch (err: any) {
-      Alert.alert('Error', err.response?.data?.error || 'Error al actualizar la poliza');
+    } catch (err) {
+      Alert.alert('Error', getApiErrorMessage(err, 'Error al actualizar la poliza'));
     }
   };
 
@@ -498,56 +504,60 @@ export default function VenderScreen() {
 }
 
 // Modal UI rendered outside main return to keep file organized
-const MediosModal: React.FC<any> = ({ visible, onClose, medios, loading, onSelect }) => (
-  <Modal visible={visible} animationType="slide" transparent>
-    <View style={modalStyles.overlay}>
-      <View style={modalStyles.container}>
-        <Text style={modalStyles.title}>Elegir medio de pago</Text>
-        {loading ? (
-          <Text>Cargando...</Text>
-        ) : medios.length === 0 ? (
-          <View style={{ alignItems: 'center' }}>
-            <Text style={{ marginBottom: 12 }}>No hay medios de pago verificados</Text>
-            <Button
-              title="Agregar medio de pago"
-              onPress={() => { onClose(); router.push('/medios-pago'); }}
-            />
-          </View>
-        ) : (
-          <FlatList
-            data={medios}
-            keyExtractor={(m) => String(m.identificador)}
-            renderItem={({ item }) => (
-              <TouchableOpacity
-                style={modalStyles.item}
-                onPress={() => { onSelect(item.identificador); onClose(); }}
-                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                accessible
-                accessibilityRole="button"
-              >
-                <View>
-                  <Text style={modalStyles.itemTitle}>{item.descripcion || item.tipo || `Medio ${item.identificador}`}</Text>
-                  <Text style={modalStyles.itemSubtitle}>{Number(item.montoDisponible || 0).toLocaleString()} {item.moneda}</Text>
-                </View>
-                <Text style={modalStyles.choose}>Seleccionar</Text>
-              </TouchableOpacity>
-            )}
-          />
-        )}
-        <Button title="Cerrar" variant="outline" onPress={onClose} />
+interface MediosModalProps {
+  visible: boolean;
+  onClose: () => void;
+  medios: MedioPago[];
+  loading: boolean;
+  onSelect: (medioId: number) => void;
+}
+
+const MediosModal = ({ visible, onClose, medios, loading, onSelect }: MediosModalProps) => (
+  <Modal visible={visible} onClose={onClose} title="Elegir medio de pago" variant="bottom">
+    {loading ? (
+      <Text style={modalStyles.message}>Cargando...</Text>
+    ) : medios.length === 0 ? (
+      <View style={modalStyles.emptyState}>
+        <Text style={modalStyles.message}>No hay medios de pago verificados</Text>
+        <Button
+          title="Agregar medio de pago"
+          onPress={() => { onClose(); router.push('/medios-pago'); }}
+        />
       </View>
-    </View>
+    ) : (
+      <FlatList
+        data={medios}
+        keyExtractor={(m) => String(m.identificador)}
+        style={modalStyles.list}
+        renderItem={({ item }) => (
+          <TouchableOpacity
+            style={modalStyles.item}
+            onPress={() => { onSelect(item.identificador); onClose(); }}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessible
+            accessibilityRole="button"
+          >
+            <View>
+              <Text style={modalStyles.itemTitle}>{item.descripcion || item.tipo || `Medio ${item.identificador}`}</Text>
+              <Text style={modalStyles.itemSubtitle}>{Number(item.montoDisponible || 0).toLocaleString()} {item.moneda}</Text>
+            </View>
+            <Text style={modalStyles.choose}>Seleccionar</Text>
+          </TouchableOpacity>
+        )}
+      />
+    )}
   </Modal>
 );
 
 const modalStyles = StyleSheet.create({
-  overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
-  container: { width: '90%', maxHeight: '80%', backgroundColor: 'white', borderRadius: 12, padding: 16 },
-  title: { fontSize: 18, fontWeight: '700', marginBottom: 12 },
-  item: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#eee' },
-  itemTitle: { fontWeight: '600' },
-  itemSubtitle: { color: '#666', marginTop: 4 },
-  choose: { color: '#007bff', fontWeight: '600' },
+  // Acota la altura para que listas largas hagan scroll dentro del modal (no desborden el viewport).
+  list: { maxHeight: 360 },
+  message: { fontFamily: fonts.body, fontSize: fontSizes.base, color: colors.textSecondary, marginBottom: spacing.md },
+  emptyState: { alignItems: 'center' },
+  item: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: spacing.md, borderBottomWidth: 1, borderBottomColor: colors.border },
+  itemTitle: { fontFamily: fonts.bodySemibold, fontSize: fontSizes.base, color: colors.textPrimary },
+  itemSubtitle: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.textMuted, marginTop: spacing.xs },
+  choose: { fontFamily: fonts.bodySemibold, fontSize: fontSizes.sm, color: colors.auctionGold },
 });
 
 const styles = StyleSheet.create({

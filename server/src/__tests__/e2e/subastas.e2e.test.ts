@@ -107,6 +107,8 @@ describe('Subastas E2E', () => {
   // ─── GET /api/subastas/:id/catalogo ───
 
   describe('GET /api/subastas/:id/catalogo', () => {
+    // Sin productoId numerico: el controller omite la query de fotos,
+    // por lo que solo se ejecutan 2 queries (items + totalPiezas).
     const catalogoItems = [
       { identificador: 10, subastado: 'no', descripcionCatalogo: 'Cuadro antiguo', duenioNombre: 'Pedro', fotoId: 1 },
     ];
@@ -123,12 +125,10 @@ describe('Subastas E2E', () => {
       expect(res.body.totalPiezas).toBe(1);
     });
 
-    it('should return catalogo with prices when authenticated with sufficient category', async () => {
+    it('should return catalogo when authenticated', async () => {
       const token = generateToken({ id: 42, email: 'a@a.com', categoria: 'oro', admitido: 'si' });
 
-      // Subasta category check
-      mockQuery.mockResolvedValueOnce({ recordset: [{ categoria: 'comun' }] });
-      // Catalogo items
+      // Mismo comportamiento que sin auth: items + totalPiezas.
       mockQuery.mockResolvedValueOnce({ recordset: catalogoItems });
       mockQuery.mockResolvedValueOnce({ recordset: [{ totalPiezas: 1 }] });
 
@@ -138,40 +138,39 @@ describe('Subastas E2E', () => {
 
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
+      expect(res.body.data).toHaveLength(1);
     });
 
-    it('should return 403 when user category is insufficient', async () => {
-      const token = generateToken({ id: 42, email: 'a@a.com', categoria: 'comun', admitido: 'si' });
+    it('should query fotos with parameters when items have numeric productoId', async () => {
+      const itemsConProducto = [
+        { identificador: 10, subastado: 'no', productoId: 5, descripcionCatalogo: 'Cuadro', duenioNombre: 'Pedro' },
+      ];
+      mockQuery.mockResolvedValueOnce({ recordset: itemsConProducto });
+      mockQuery.mockResolvedValueOnce({ recordset: [{ totalPiezas: 1 }] });
+      mockQuery.mockResolvedValueOnce({ recordset: [{ producto: 5, foto: Buffer.from('img'), identificador: 1 }] });
 
-      mockQuery.mockResolvedValueOnce({ recordset: [{ categoria: 'oro' }] });
+      const res = await request(app).get('/api/subastas/1/catalogo');
 
-      const res = await request(app)
-        .get('/api/subastas/1/catalogo')
-        .set('Authorization', `Bearer ${token}`);
-
-      expect(res.status).toBe(403);
-      expect(res.body.error).toContain('categoria no permite');
+      expect(res.status).toBe(200);
+      // El IN clause se parametriza con @p0 (sin concatenar valores).
+      expect(mockInput).toHaveBeenCalledWith('p0', 5);
+      expect(res.body.data[0].fotoData).toBe(
+        `data:image/jpeg;base64,${Buffer.from('img').toString('base64')}`,
+      );
     });
 
-    it('should return 404 when subasta not found (authenticated)', async () => {
-      const token = generateToken({ id: 42, email: 'a@a.com', categoria: 'comun', admitido: 'si' });
+    it('should treat an invalid token as anonymous on this public route (BSEC-09)', async () => {
+      // optionalAuth ya no responde 401 ante token invalido en rutas publicas:
+      // continua como anonimo (catalogo sin precios), igual que sin token.
+      mockQuery.mockResolvedValueOnce({ recordset: catalogoItems });
+      mockQuery.mockResolvedValueOnce({ recordset: [{ totalPiezas: 1 }] });
 
-      mockQuery.mockResolvedValueOnce({ recordset: [] });
-
-      const res = await request(app)
-        .get('/api/subastas/999/catalogo')
-        .set('Authorization', `Bearer ${token}`);
-
-      expect(res.status).toBe(404);
-      expect(res.body.error).toContain('no encontrada');
-    });
-
-    it('should return 401 with invalid token', async () => {
       const res = await request(app)
         .get('/api/subastas/1/catalogo')
         .set('Authorization', 'Bearer bad-token');
 
-      expect(res.status).toBe(401);
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
     });
   });
 
@@ -187,22 +186,34 @@ describe('Subastas E2E', () => {
       subastaCat: 'comun', moneda: 'ARS',
     };
 
+    // El controller ejecuta 4 queries en el happy path:
+    // item, fotos, articulos, fotosArticulos. Las fotos se devuelven como
+    // data URIs base64 a partir del campo binario `foto`.
+    const fotoUri = (txt: string) => `data:image/jpeg;base64,${Buffer.from(txt).toString('base64')}`;
+
     it('should return item detail without prices when unauthenticated', async () => {
       mockQuery.mockResolvedValueOnce({ recordset: [itemDetail] });
-      mockQuery.mockResolvedValueOnce({ recordset: [{ identificador: 100 }, { identificador: 101 }] });
+      mockQuery.mockResolvedValueOnce({ recordset: [
+        { identificador: 100, foto: Buffer.from('a') },
+        { identificador: 101, foto: Buffer.from('b') },
+      ] });
+      mockQuery.mockResolvedValueOnce({ recordset: [] });
+      mockQuery.mockResolvedValueOnce({ recordset: [] });
 
       const res = await request(app).get('/api/subastas/items/10');
 
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.data.identificador).toBe(10);
-      expect(res.body.data.fotos).toEqual([100, 101]);
+      expect(res.body.data.fotos).toEqual([fotoUri('a'), fotoUri('b')]);
     });
 
     it('should return item detail with prices when authenticated', async () => {
       const token = generateToken({ id: 42, email: 'a@a.com', categoria: 'comun', admitido: 'si' });
 
       mockQuery.mockResolvedValueOnce({ recordset: [{ ...itemDetail, precioBase: 1000, comision: 10 }] });
+      mockQuery.mockResolvedValueOnce({ recordset: [] });
+      mockQuery.mockResolvedValueOnce({ recordset: [] });
       mockQuery.mockResolvedValueOnce({ recordset: [] });
 
       const res = await request(app)
@@ -224,6 +235,8 @@ describe('Subastas E2E', () => {
 
     it('should return item with empty fotos array when no photos exist', async () => {
       mockQuery.mockResolvedValueOnce({ recordset: [itemDetail] });
+      mockQuery.mockResolvedValueOnce({ recordset: [] });
+      mockQuery.mockResolvedValueOnce({ recordset: [] });
       mockQuery.mockResolvedValueOnce({ recordset: [] });
 
       const res = await request(app).get('/api/subastas/items/10');

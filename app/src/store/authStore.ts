@@ -82,6 +82,14 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   logout: async () => {
+    const refreshToken = await SecureStore.getItemAsync('refreshToken');
+    if (refreshToken) {
+      try {
+        await api.post('/auth/logout', { refreshToken });
+      } catch {
+        // Ignorar errores de red: igualmente limpiamos la sesion local
+      }
+    }
     await SecureStore.deleteItemAsync('accessToken');
     await SecureStore.deleteItemAsync('refreshToken');
     set({ user: null, isAuthenticated: false });

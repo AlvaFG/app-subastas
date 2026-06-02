@@ -532,6 +532,50 @@ const options: swaggerJsdoc.Options = {
         },
       },
 
+      '/api/multas/{id}/pagar': {
+        put: {
+          tags: ['Multas'],
+          summary: 'Pagar una multa',
+          security: [{ bearerAuth: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }],
+          responses: {
+            '200': { description: 'Multa pagada exitosamente' },
+            '401': { description: 'Unauthorized' },
+            '404': { description: 'Not Found — Multa no encontrada o no pertenece al usuario' },
+          },
+        },
+      },
+
+      '/api/medios-pago/{id}/saldo': {
+        put: {
+          tags: ['Medios de Pago'],
+          summary: 'Actualizar saldo de un medio de pago',
+          description: 'Permite ajustar el monto disponible (ej: cheque certificado).',
+          security: [{ bearerAuth: [] }],
+          parameters: [{ name: 'id', in: 'path', required: true, schema: { type: 'integer' } }],
+          requestBody: {
+            required: true,
+            content: {
+              'application/json': {
+                schema: {
+                  type: 'object',
+                  required: ['monto'],
+                  properties: {
+                    monto: { type: 'number', description: 'Nuevo monto disponible' },
+                  },
+                },
+              },
+            },
+          },
+          responses: {
+            '200': { description: 'Saldo actualizado' },
+            '400': { description: 'Bad Request — Monto inválido' },
+            '401': { description: 'Unauthorized' },
+            '404': { description: 'Not Found — Medio no encontrado o no pertenece al usuario' },
+          },
+        },
+      },
+
       // ── VENTA ────────────────────────────────────────
       '/api/venta/solicitudes': {
         get: {

@@ -1,9 +1,27 @@
 import { Server, Socket } from 'socket.io';
 import jwt from 'jsonwebtoken';
+import sql from 'mssql';
 import { connectDB } from '../models/db';
 import { AuthPayload } from '../middleware/auth';
 import { createWinnerNotification } from '../controllers/notificacionesController';
 import { canParticipateInAuction } from '../utils/category';
+import { getJwtSecret } from '../config/env';
+
+// Número de país considerado "local" para el costo de envío (REQ-05).
+// Si no se configura, todos los envíos se tratan como domésticos.
+const LOCAL_COUNTRY_NUMERO = process.env.LOCAL_COUNTRY_NUMERO
+  ? parseInt(process.env.LOCAL_COUNTRY_NUMERO, 10)
+  : null;
+
+/**
+ * Costo de envío a la dirección declarada del ganador (REQ-05 / BLOG-09).
+ * Simplificación académica documentada: sin tabla de tarifas de transporte, se
+ * usa una tasa sobre el importe diferenciando envío doméstico vs internacional.
+ */
+function calcularCostoEnvio(importe: number, esInternacional: boolean): number {
+  const tasa = esInternacional ? 0.08 : 0.03;
+  return +(importe * tasa).toFixed(2);
+}
 
 // Track: userId -> subastaId (T402: max 1 subasta por usuario)
 const userConnections = new Map<number, number>();
@@ -99,7 +117,7 @@ async function finalizeItemForPayment(io: Server, subastaId: number, itemId: num
     .input('item', itemId)
     .query(`
       SELECT TOP 1 p.identificador as pujoId, p.importe, p.asistente,
-             a.cliente, pe.nombre as ganadorNombre,
+             a.cliente, pe.nombre as ganadorNombre, c.numeroPais,
              ic.precioBase, ic.comision,
              pr.identificador as productoId, pr.duenio,
              s.moneda
@@ -112,7 +130,7 @@ async function finalizeItemForPayment(io: Server, subastaId: number, itemId: num
       INNER JOIN subastas s ON s.identificador = ca.subasta
       INNER JOIN productos pr ON pr.identificador = ic.producto
       WHERE p.item = @item
-      ORDER BY p.importe DESC
+      ORDER BY p.importe DESC, p.fechaPuja ASC, p.identificador ASC
     `);
 
   if (winner.recordset.length === 0) {
@@ -122,15 +140,22 @@ async function finalizeItemForPayment(io: Server, subastaId: number, itemId: num
       .input('item', itemId)
       .query("UPDATE itemsCatalogo SET subastado = 'si' WHERE identificador = @item");
 
-    clearAuctionState(subastaId);
+    // Compra automatica de la empresa a precio base (REQ-18). Nota: registroDeSubasta
+    // exige un cliente comprador y la empresa no es un cliente del modelo, por lo que la
+    // compra se refleja marcando el item como subastado + evento (limitacion documentada).
     io.to(`auction-${subastaId}`).emit('item-no-bids', { itemId, compraEmpresa: true });
+    await advanceOrCloseAuction(io, subastaId);
     return { success: true, noBids: true };
   }
 
   const w = winner.recordset[0];
   const importe = parseFloat(w.importe);
   const comision = parseFloat(w.comision || 0);
-  const costoEnvio = +(importe * 0.05).toFixed(2);
+  const esInternacional =
+    LOCAL_COUNTRY_NUMERO !== null &&
+    w.numeroPais != null &&
+    Number(w.numeroPais) !== LOCAL_COUNTRY_NUMERO;
+  const costoEnvio = calcularCostoEnvio(importe, esInternacional);
 
   pendingPayments.set(itemId, {
     subastaId,
@@ -195,7 +220,7 @@ async function getCurrentBestBid(pool: any, itemId: number) {
       INNER JOIN clientes c ON c.identificador = a.cliente
       INNER JOIN personas pe ON pe.identificador = c.identificador
       WHERE p.item = @item
-      ORDER BY p.importe DESC, p.identificador DESC
+      ORDER BY p.importe DESC, p.fechaPuja DESC, p.identificador DESC
     `);
 
   return bestBid.recordset[0] || null;
@@ -217,6 +242,35 @@ async function closeAuction(io: Server, subastaId: number) {
   }
 }
 
+/**
+ * Avanza la subasta al siguiente item sin subastar (REQ-07 / BLOG-04). Solo
+ * cierra la subasta completa cuando ya no quedan items pendientes; antes,
+ * vender o impagar un item cerraba toda la subasta y se perdian los demas.
+ */
+async function advanceOrCloseAuction(io: Server, subastaId: number): Promise<void> {
+  const pool = await connectDB();
+  const next = await pool.request()
+    .input('subastaId', subastaId)
+    .query(`
+      SELECT TOP 1 ic.identificador
+      FROM itemsCatalogo ic
+      INNER JOIN catalogos c ON c.identificador = ic.catalogo
+      WHERE c.subasta = @subastaId AND (ic.subastado = 'no' OR ic.subastado IS NULL)
+      ORDER BY ic.identificador
+    `);
+
+  if (next.recordset.length === 0) {
+    await closeAuction(io, subastaId);
+    return;
+  }
+
+  const nextItemId = Number(next.recordset[0].identificador);
+  activeItems.set(subastaId, nextItemId);
+  clearItemTimers(nextItemId);
+  io.to(`auction-${subastaId}`).emit('active-item-changed', { itemId: nextItemId });
+  scheduleNoBidAutoBuy(io, subastaId, nextItemId);
+}
+
 export function setupAuctionSocket(io: Server) {
   // Auth middleware for socket
   io.use((socket, next) => {
@@ -225,7 +279,7 @@ export function setupAuctionSocket(io: Server) {
       return next(new Error('Token requerido'));
     }
     try {
-      const decoded = jwt.verify(token, process.env.JWT_SECRET as string) as unknown as AuthPayload;
+      const decoded = jwt.verify(token, getJwtSecret()) as unknown as AuthPayload;
       (socket as any).user = decoded;
       next();
     } catch {
@@ -390,6 +444,16 @@ export function setupAuctionSocket(io: Server) {
           return;
         }
 
+        // BSEC-08: revalidar el estado de la cuenta en cada puja, ya que el token
+        // no refleja bloqueos aplicados despues de la conexion del socket.
+        const accountState = await pool.request()
+          .input('cliente', user.id)
+          .query("SELECT estado FROM personas WHERE identificador = @cliente");
+        if (accountState.recordset.length === 0 || accountState.recordset[0].estado === 'inactivo') {
+          callback({ success: false, error: 'Cuenta bloqueada' });
+          return;
+        }
+
         // Check unpaid penalties
         const multaCheck = await pool.request()
           .input('cliente', user.id)
@@ -453,95 +517,134 @@ export function setupAuctionSocket(io: Server) {
           }
         }
 
-        // Get current best bid
-        const bestBid = await pool.request()
-          .input('item', itemId)
-          .query('SELECT TOP 1 importe FROM pujos WHERE item = @item ORDER BY importe DESC');
-
-        const currentBest = bestBid.recordset.length > 0
-          ? parseFloat(bestBid.recordset[0].importe)
-          : parseFloat(precioBase);
-
-        // T404: Validate bid limits
         const base = parseFloat(precioBase);
         const isHighCategory = categoria === 'oro' || categoria === 'platino';
 
-        if (importe <= currentBest) {
-          callback({ success: false, error: `La puja debe ser mayor a ${currentBest}` });
-          return;
-        }
-
-        if (!isHighCategory) {
-          const minBid = currentBest + (base * 0.01);
-          const maxBid = currentBest + (base * 0.20);
-
-          if (importe < minBid) {
-            callback({ success: false, error: `Puja minima: ${minBid.toFixed(2)} (ultima + 1% base)` });
-            return;
-          }
-          if (importe > maxBid) {
-            callback({ success: false, error: `Puja maxima: ${maxBid.toFixed(2)} (ultima + 20% base)` });
-            return;
-          }
-        }
-
-        // T605: Validate payment method currency matches auction
+        // T605 / BLOG-13: medio de pago compatible con la moneda de la subasta.
+        // Si la subasta es en USD, exige un medio internacional (transferencia o
+        // tarjeta internacional).
         const subastaMoneda = itemInfo.recordset[0].moneda || 'ARS';
         const mediosCompat = await pool.request()
           .input('cliente2', user.id)
           .input('moneda', subastaMoneda)
           .query(`
-            SELECT COUNT(*) as count FROM mediosDePago
+            SELECT montoDisponible FROM mediosDePago
             WHERE cliente = @cliente2 AND verificado = 'si' AND activo = 'si'
               AND moneda = @moneda
+              AND (@moneda <> 'USD' OR internacional = 'si')
           `);
 
-        if (mediosCompat.recordset[0].count === 0) {
-          callback({ success: false, error: `No tiene medio de pago compatible con moneda ${subastaMoneda}` });
+        if (mediosCompat.recordset.length === 0) {
+          callback({
+            success: false,
+            error: subastaMoneda === 'USD'
+              ? 'Para subastas en USD necesita un medio de pago internacional'
+              : `No tiene medio de pago compatible con moneda ${subastaMoneda}`,
+          });
           return;
         }
 
-        // Get or create asistente record
-        let asistenteId: number;
-        const existingAsistente = await pool.request()
-          .input('cliente', user.id)
-          .input('subasta', subastaId)
-          .query('SELECT identificador FROM asistentes WHERE cliente = @cliente AND subasta = @subasta');
-
-        if (existingAsistente.recordset.length > 0) {
-          asistenteId = existingAsistente.recordset[0].identificador;
-        } else {
-          // Generate postor number
-          const maxPostor = await pool.request()
-            .input('subasta', subastaId)
-            .query('SELECT COALESCE(MAX(numeroPostor), 0) + 1 as next FROM asistentes WHERE subasta = @subasta');
-
-          const result = await pool.request()
-            .input('numeroPostor', maxPostor.recordset[0].next)
-            .input('cliente', user.id)
-            .input('subasta', subastaId)
-            .query(`
-              INSERT INTO asistentes (numeroPostor, cliente, subasta)
-              OUTPUT INSERTED.identificador
-              VALUES (@numeroPostor, @cliente, @subasta)
-            `);
-          asistenteId = result.recordset[0].identificador;
+        // BLOG-06: la puja no puede superar los fondos del medio. Clave para la
+        // garantia por cheque (req 21): las compras no superan el monto del cheque.
+        // Un medio con montoDisponible NULL (cuenta/tarjeta sin tope) se considera suficiente.
+        const fondosIlimitados = mediosCompat.recordset.some((m: any) => m.montoDisponible === null);
+        const maxDisponible = mediosCompat.recordset.reduce(
+          (max: number, m: any) =>
+            m.montoDisponible !== null && parseFloat(m.montoDisponible) > max ? parseFloat(m.montoDisponible) : max,
+          0
+        );
+        if (!fondosIlimitados && maxDisponible < importe) {
+          callback({ success: false, error: 'Sus medios de pago (incluido el cheque certificado) no cubren esta puja.' });
+          return;
         }
 
-        // Insert bid
-        const bidResult = await pool.request()
-          .input('asistente', asistenteId)
-          .input('item', itemId)
-          .input('importe', importe)
-          .query(`
-            INSERT INTO pujos (asistente, item, importe)
-            OUTPUT INSERTED.identificador
-            VALUES (@asistente, @item, @importe)
-          `);
+        // BLOG-01 / DB-12: seccion critica atomica. Se serializa por item con
+        // bloqueo para que dos pujas concurrentes no lean el mismo "mejor postor"
+        // ni dupliquen numeroPostor (req 26: no pujar sin confirmar la anterior).
+        const tx = new sql.Transaction(pool);
+        await tx.begin();
+        let bidId: number;
+        try {
+          const itemLock = await new sql.Request(tx)
+            .input('item', itemId)
+            .query("SELECT subastado FROM itemsCatalogo WITH (UPDLOCK, HOLDLOCK) WHERE identificador = @item");
+          if (itemLock.recordset.length === 0 || itemLock.recordset[0].subastado === 'si') {
+            await tx.rollback();
+            callback({ success: false, error: 'Este item ya fue vendido' });
+            return;
+          }
 
-        // T406: Broadcast to all connected users
+          const bestBidTx = await new sql.Request(tx)
+            .input('item', itemId)
+            .query('SELECT TOP 1 importe FROM pujos WITH (UPDLOCK, HOLDLOCK) WHERE item = @item ORDER BY importe DESC, fechaPuja DESC');
+          const currentBest = bestBidTx.recordset.length > 0
+            ? parseFloat(bestBidTx.recordset[0].importe)
+            : base;
+
+          // T404: validar limites de puja contra el mejor postor (ya bloqueado).
+          if (importe <= currentBest) {
+            await tx.rollback();
+            callback({ success: false, error: `La puja debe ser mayor a ${currentBest}` });
+            return;
+          }
+          if (!isHighCategory) {
+            const minBid = currentBest + base * 0.01;
+            const maxBid = currentBest + base * 0.20;
+            if (importe < minBid) {
+              await tx.rollback();
+              callback({ success: false, error: `Puja minima: ${minBid.toFixed(2)} (ultima + 1% base)` });
+              return;
+            }
+            if (importe > maxBid) {
+              await tx.rollback();
+              callback({ success: false, error: `Puja maxima: ${maxBid.toFixed(2)} (ultima + 20% base)` });
+              return;
+            }
+          }
+
+          // Asegurar registro de asistente (numeroPostor unico por subasta)
+          let asistenteId: number;
+          const existingAsistente = await new sql.Request(tx)
+            .input('cliente', user.id)
+            .input('subasta', subastaId)
+            .query('SELECT identificador FROM asistentes WITH (UPDLOCK, HOLDLOCK) WHERE cliente = @cliente AND subasta = @subasta');
+          if (existingAsistente.recordset.length > 0) {
+            asistenteId = existingAsistente.recordset[0].identificador;
+          } else {
+            const maxPostor = await new sql.Request(tx)
+              .input('subasta', subastaId)
+              .query('SELECT COALESCE(MAX(numeroPostor), 0) + 1 as next FROM asistentes WITH (UPDLOCK, HOLDLOCK) WHERE subasta = @subasta');
+            const inserted = await new sql.Request(tx)
+              .input('numeroPostor', maxPostor.recordset[0].next)
+              .input('cliente', user.id)
+              .input('subasta', subastaId)
+              .query(`
+                INSERT INTO asistentes (numeroPostor, cliente, subasta)
+                OUTPUT INSERTED.identificador
+                VALUES (@numeroPostor, @cliente, @subasta)
+              `);
+            asistenteId = inserted.recordset[0].identificador;
+          }
+
+          const bidResult = await new sql.Request(tx)
+            .input('asistente', asistenteId)
+            .input('item', itemId)
+            .input('importe', importe)
+            .query(`
+              INSERT INTO pujos (asistente, item, importe)
+              OUTPUT INSERTED.identificador
+              VALUES (@asistente, @item, @importe)
+            `);
+          bidId = bidResult.recordset[0].identificador;
+          await tx.commit();
+        } catch (txError) {
+          try { await tx.rollback(); } catch { /* ya revertida */ }
+          throw txError;
+        }
+
+        // T406: Broadcast a todos los conectados (fuera de la transaccion)
         io.to(`auction-${subastaId}`).emit('new-bid', {
-          bidId: bidResult.recordset[0].identificador,
+          bidId,
           itemId,
           importe,
           postorId: user.id,
@@ -549,7 +652,7 @@ export function setupAuctionSocket(io: Server) {
           timestamp: new Date().toISOString(),
         });
 
-        // Reset the close timer after every valid bid so the last bidder wins if time expires.
+        // Reiniciar timers: el ultimo postor gana si expira el tiempo.
         const noBidTimer = itemNoBidTimers.get(itemId);
         if (noBidTimer) {
           clearTimeout(noBidTimer);
@@ -577,7 +680,7 @@ export function setupAuctionSocket(io: Server) {
           closeInMs: LAST_BID_CLOSE_MS,
         });
 
-        callback({ success: true, data: { bidId: bidResult.recordset[0].identificador } });
+        callback({ success: true, data: { bidId } });
 
       } catch (error) {
         console.error('Error place-bid:', error);
@@ -656,9 +759,13 @@ export function setupAuctionSocket(io: Server) {
         }
 
         const mp = medio.recordset[0];
-        const monedaCompatible = mp.moneda === pending.moneda;
-        if (!monedaCompatible) {
+        if (mp.moneda !== pending.moneda) {
           callback({ success: false, error: `El medio no es compatible con ${pending.moneda}` });
+          return;
+        }
+        // BLOG-13: pagos en USD requieren medio internacional.
+        if (pending.moneda === 'USD' && mp.internacional !== 'si') {
+          callback({ success: false, error: 'Para pagos en USD necesita un medio internacional' });
           return;
         }
 
@@ -671,39 +778,19 @@ export function setupAuctionSocket(io: Server) {
           fechaLimite.setHours(fechaLimite.getHours() + 72);
           const mensajeMulta = `No posee fondos suficientes para pagar su oferta. Multa aplicada: ${importeMulta.toFixed(2)}. Debe pagarla en 72hs.`;
 
-          try {
-            await pool.request()
-              .input('cliente', user.id)
-              .input('subasta', pending.subastaId)
-              .input('item', pending.itemId)
-              .input('importeOriginal', pending.importe)
-              .input('importeMulta', importeMulta)
-              .input('fechaLimite', fechaLimite)
-              .input('moneda', pending.moneda)
-              .query(`
-                INSERT INTO multas (cliente, subasta, item, importeOriginal, importeMulta, fechaLimite, moneda)
-                VALUES (@cliente, @subasta, @item, @importeOriginal, @importeMulta, @fechaLimite, @moneda)
-              `);
-          } catch (insertError: any) {
-            const rawMessage = String(insertError?.message || '').toLowerCase();
-            const isMonedaSchemaError = rawMessage.includes('invalid column name') && rawMessage.includes('moneda');
-
-            if (!isMonedaSchemaError) {
-              throw insertError;
-            }
-
-            await pool.request()
-              .input('cliente', user.id)
-              .input('subasta', pending.subastaId)
-              .input('item', pending.itemId)
-              .input('importeOriginal', pending.importe)
-              .input('importeMulta', importeMulta)
-              .input('fechaLimite', fechaLimite)
-              .query(`
-                INSERT INTO multas (cliente, subasta, item, importeOriginal, importeMulta, fechaLimite)
-                VALUES (@cliente, @subasta, @item, @importeOriginal, @importeMulta, @fechaLimite)
-              `);
-          }
+          // La columna multas.moneda esta garantizada por la migracion 004.
+          await pool.request()
+            .input('cliente', user.id)
+            .input('subasta', pending.subastaId)
+            .input('item', pending.itemId)
+            .input('importeOriginal', pending.importe)
+            .input('importeMulta', importeMulta)
+            .input('fechaLimite', fechaLimite)
+            .input('moneda', pending.moneda)
+            .query(`
+              INSERT INTO multas (cliente, subasta, item, importeOriginal, importeMulta, fechaLimite, moneda)
+              VALUES (@cliente, @subasta, @item, @importeOriginal, @importeMulta, @fechaLimite, @moneda)
+            `);
 
           await pool.request()
             .input('cliente', user.id)
@@ -731,9 +818,11 @@ export function setupAuctionSocket(io: Server) {
             fechaLimite,
           });
 
-          await closeAuction(io, pending.subastaId);
+          // REQ-07/BLOG-04: avanzar al siguiente item; no cerrar toda la subasta.
+          await advanceOrCloseAuction(io, pending.subastaId);
 
-          callback({ success: false, error: mensajeMulta });
+          // A5-03: codigo estable para que el cliente no dependa de parsear el texto.
+          callback({ success: false, error: mensajeMulta, code: 'MULTA_APLICADA' });
           return;
         }
 
@@ -754,9 +843,12 @@ export function setupAuctionSocket(io: Server) {
           .input('cliente', user.id)
           .query('SELECT identificador FROM duenios WHERE identificador = @cliente');
         if (duenioWinner.recordset.length === 0) {
+          const verificador = await pool.request()
+            .query('SELECT TOP 1 identificador FROM empleados ORDER BY identificador');
+          const verificadorId = verificador.recordset.length > 0 ? verificador.recordset[0].identificador : null;
           await pool.request()
             .input('identificador', user.id)
-            .input('verificador', 1)
+            .input('verificador', verificadorId)
             .query('INSERT INTO duenios (identificador, verificador) VALUES (@identificador, @verificador)');
         }
 
@@ -788,7 +880,8 @@ export function setupAuctionSocket(io: Server) {
 
         await createWinnerNotification(user.id, pending.importe, pending.comision, pending.costoEnvio, pending.moneda);
 
-        await closeAuction(io, pending.subastaId);
+        // REQ-07/BLOG-04: continuar con el siguiente item; cerrar solo si no quedan.
+        await advanceOrCloseAuction(io, pending.subastaId);
 
         pendingPayments.delete(data.itemId);
         callback({ success: true, data: { totalPagado: total } });
@@ -821,52 +914,63 @@ export function setupAuctionSocket(io: Server) {
         pendingPayments.delete(data.itemId);
 
         const reopenedBid = await getCurrentBestBid(pool, pending.itemId);
-        const reopenedState = reopenedBid
-          ? {
-              itemId: pending.itemId,
-              bestBid: Number(reopenedBid.importe || 0),
-              bestBidder: reopenedBid.postorNombre,
-              bestBidderId: reopenedBid.postorId,
-              bidId: reopenedBid.bidId,
-            }
-          : {
-              itemId: pending.itemId,
-              bestBid: pending.importe,
-              bestBidder: '',
-              bestBidderId: null,
-              bidId: null,
-            };
 
-        // Resume the bid timer so the auction can continue from the previous offer.
-        const existingTimer = itemCloseTimers.get(pending.itemId);
-        if (existingTimer) {
-          clearTimeout(existingTimer);
-          itemCloseTimers.delete(pending.itemId);
-        }
-
-        const timer = setTimeout(async () => {
-          try {
-            await finalizeItemForPayment(io, pending.subastaId, pending.itemId);
-          } catch (err) {
-            console.error('Error re-closing item after payment cancel:', err);
-          } finally {
-            itemCloseTimers.delete(pending.itemId);
-          }
-        }, LAST_BID_CLOSE_MS);
-        itemCloseTimers.set(pending.itemId, timer);
-
+        clearItemTimers(pending.itemId);
         activeItems.set(pending.subastaId, pending.itemId);
 
-        io.to(`auction-${pending.subastaId}`).emit('item-payment-cancelled', {
-          ...reopenedState,
-          closeInMs: LAST_BID_CLOSE_MS,
-        });
-        io.to(`auction-${pending.subastaId}`).emit('item-close-scheduled', {
-          itemId: pending.itemId,
-          closeInMs: LAST_BID_CLOSE_MS,
-        });
+        if (reopenedBid) {
+          // Quedaba al menos una oferta previa: reanudar el cierre por inactividad
+          // desde esa oferta.
+          const reopenedState = {
+            itemId: pending.itemId,
+            bestBid: Number(reopenedBid.importe || 0),
+            bestBidder: reopenedBid.postorNombre,
+            bestBidderId: reopenedBid.postorId,
+            bidId: reopenedBid.bidId,
+          };
+          const timer = setTimeout(async () => {
+            try {
+              await finalizeItemForPayment(io, pending.subastaId, pending.itemId);
+            } catch (err) {
+              console.error('Error re-closing item after payment cancel:', err);
+            } finally {
+              itemCloseTimers.delete(pending.itemId);
+            }
+          }, LAST_BID_CLOSE_MS);
+          itemCloseTimers.set(pending.itemId, timer);
 
-        callback({ success: true, data: reopenedState });
+          io.to(`auction-${pending.subastaId}`).emit('item-payment-cancelled', {
+            ...reopenedState,
+            closeInMs: LAST_BID_CLOSE_MS,
+          });
+          io.to(`auction-${pending.subastaId}`).emit('item-close-scheduled', {
+            itemId: pending.itemId,
+            closeInMs: LAST_BID_CLOSE_MS,
+          });
+          callback({ success: true, data: reopenedState });
+        } else {
+          // BLOG-14: no quedan pujas previas. Volver al precio base y reprogramar la
+          // compra automatica de la empresa (no un cierre inmediato por debajo del minimo).
+          const itemInfo = await pool.request()
+            .input('item', pending.itemId)
+            .query('SELECT precioBase FROM itemsCatalogo WHERE identificador = @item');
+          const precioBase = itemInfo.recordset.length > 0
+            ? parseFloat(itemInfo.recordset[0].precioBase)
+            : 0;
+          const reopenedState = {
+            itemId: pending.itemId,
+            bestBid: precioBase,
+            bestBidder: '',
+            bestBidderId: null,
+            bidId: null,
+          };
+          scheduleNoBidAutoBuy(io, pending.subastaId, pending.itemId);
+          io.to(`auction-${pending.subastaId}`).emit('item-payment-cancelled', {
+            ...reopenedState,
+            closeInMs: NO_BID_AUTO_BUY_MS,
+          });
+          callback({ success: true, data: reopenedState });
+        }
       } catch (error) {
         console.error('Error cancel-payment:', error);
         callback({ success: false, error: 'No se pudo cancelar el pago' });

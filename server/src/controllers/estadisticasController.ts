@@ -73,21 +73,39 @@ export async function getEstadisticas(req: AuthRequest, res: Response): Promise<
         FROM multas WHERE cliente = @cliente
       `);
 
+    const totalPujadoARS = parseFloat(importes.recordset[0].totalPujadoARS);
+    const totalPujadoUSD = parseFloat(importes.recordset[0].totalPujadoUSD);
+    const totalPagadoARS = parseFloat(pagados.recordset[0].totalPagadoARS);
+    const totalPagadoUSD = parseFloat(pagados.recordset[0].totalPagadoUSD);
+    const totalComisionesARS = parseFloat(pagados.recordset[0].totalComisionesARS);
+    const totalComisionesUSD = parseFloat(pagados.recordset[0].totalComisionesUSD);
+
     res.json({
       success: true,
       data: {
         subastasAsistidas: asistidas.recordset[0].total,
         subastasGanadas: ganadas.recordset[0].total,
         totalPujas: importes.recordset[0].totalPujas,
-        totalPujado: parseFloat(importes.recordset[0].totalPujadoARS) + parseFloat(importes.recordset[0].totalPujadoUSD),
-        totalPagado: parseFloat(pagados.recordset[0].totalPagadoARS) + parseFloat(pagados.recordset[0].totalPagadoUSD),
-        totalComisiones: parseFloat(pagados.recordset[0].totalComisionesARS) + parseFloat(pagados.recordset[0].totalComisionesUSD),
-        totalPujadoARS: parseFloat(importes.recordset[0].totalPujadoARS),
-        totalPujadoUSD: parseFloat(importes.recordset[0].totalPujadoUSD),
-        totalPagadoARS: parseFloat(pagados.recordset[0].totalPagadoARS),
-        totalPagadoUSD: parseFloat(pagados.recordset[0].totalPagadoUSD),
-        totalComisionesARS: parseFloat(pagados.recordset[0].totalComisionesARS),
-        totalComisionesUSD: parseFloat(pagados.recordset[0].totalComisionesUSD),
+        // BLOG-07: totales agrupados por moneda (NO se suman ARS + USD)
+        totales: {
+          ARS: {
+            totalPujado: totalPujadoARS,
+            totalPagado: totalPagadoARS,
+            totalComisiones: totalComisionesARS,
+          },
+          USD: {
+            totalPujado: totalPujadoUSD,
+            totalPagado: totalPagadoUSD,
+            totalComisiones: totalComisionesUSD,
+          },
+        },
+        // Claves planas por moneda (compatibilidad)
+        totalPujadoARS,
+        totalPujadoUSD,
+        totalPagadoARS,
+        totalPagadoUSD,
+        totalComisionesARS,
+        totalComisionesUSD,
         porCategoria: porCategoria.recordset,
         multas: {
           total: multas.recordset[0].total,

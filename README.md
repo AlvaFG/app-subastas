@@ -45,6 +45,7 @@ proyecto/
       item/[id].tsx             # Detalle de pieza
       estadisticas.tsx          # Dashboard metricas
       notificaciones.tsx        # Notificaciones
+      medios-pago.tsx           # Gestion medios de pago
     src/
       components/               # Button, Input, Card, Modal, Badge, Avatar, Loading
       theme/                    # Design tokens (colors, typography, spacing, motion)
@@ -53,18 +54,20 @@ proyecto/
 
   server/                       # Node.js + Express backend
     src/
-      routes/                   # 7 archivos de rutas (22 endpoints)
+      routes/                   # 7 archivos de rutas
       controllers/              # 7 controllers
       middleware/               # authGuard, categoryGuard, validate
       models/                   # db.ts (mssql connection pool)
       socket/                   # auctionHandler.ts (subastas en vivo)
-      migrations/               # 3 scripts SQL
-      __tests__/                # 93 tests (unit + E2E)
+      utils/                    # category.ts (logica de categorias)
+      __tests__/                # Tests (unit + E2E)
       swagger.ts                # OpenAPI 3.0.3 spec
       index.ts                  # Entry point
+    migrations/                 # Scripts SQL adicionales
+    scripts/                    # Utilidades (list-users, reset-password)
+    unified-migrations.sql      # Schema completo unificado
 
   docs/                         # Documentacion completa
-  EstructuraActual.sql          # Schema SQL Server original (16 tablas)
   TPO.md                        # Requerimientos del negocio
   milestone.md                  # Roadmap (63 tasks, 7 fases)
 ```
@@ -83,10 +86,8 @@ proyecto/
 cd server
 npm install
 cp .env.example .env          # Configurar credenciales DB, JWT secrets, Cloudinary
-# Ejecutar migraciones en orden:
-#   src/migrations/001_fix_typos.sql
-#   src/migrations/002_nuevas_columnas.sql
-#   src/migrations/003_nuevas_tablas.sql
+# Ejecutar migraciones unificadas:
+node run-unified-migrations.js
 npm run dev
 ```
 

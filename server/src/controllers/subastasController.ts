@@ -1,189 +1,6 @@
 import { Request, Response } from 'express';
 import { connectDB } from '../models/db';
 import { AuthRequest } from '../middleware/auth';
-import { canParticipateInAuction } from '../utils/category';
-import sql from 'mssql';
-
-// T305: POST /subastas/:id/bid  (REST wrapper for socket place-bid)
-export async function placeBid(req: AuthRequest, res: Response): Promise<void> {
-  try {
-    const { id } = req.params;
-    const subastaId = parseInt(String(id), 10);
-    const { itemId, importe } = req.body;
-
-    if (!req.user) {
-      res.status(401).json({ success: false, error: 'No autenticado' });
-      return;
-    }
-
-    const user = req.user;
-
-    const pool = await connectDB();
-
-    // Basic validations
-    if (!Number.isFinite(importe) || importe <= 0) {
-      res.status(400).json({ success: false, error: 'El monto debe ser un numero positivo' });
-      return;
-    }
-
-    // Get item info + auction
-    const itemInfo = await pool.request()
-      .input('item', itemId)
-      .input('subastaId', subastaId)
-      .query(`
-        SELECT ic.precioBase, ic.subastado, s.categoria, s.moneda, s.estado
-        FROM itemsCatalogo ic
-        INNER JOIN catalogos c ON c.identificador = ic.catalogo
-        INNER JOIN subastas s ON s.identificador = c.subasta
-        WHERE ic.identificador = @item AND s.identificador = @subastaId
-      `);
-
-    if (itemInfo.recordset.length === 0) {
-      res.status(404).json({ success: false, error: 'Item no encontrado en esta subasta' });
-      return;
-    }
-
-    const { precioBase, subastado, categoria, estado } = itemInfo.recordset[0];
-
-    if (estado !== 'abierta') {
-      res.status(400).json({ success: false, error: 'La subasta ya esta cerrada' });
-      return;
-    }
-
-    if (subastado === 'si') {
-      res.status(400).json({ success: false, error: 'Este item ya fue vendido' });
-      return;
-    }
-
-    if (!canParticipateInAuction(user.categoria, categoria)) {
-      res.status(403).json({ success: false, error: 'Tu categoria no permite ofertar en esta subasta' });
-      return;
-    }
-
-    // Security: the owner of the product cannot place bids on their own item
-    const ownerRes = await pool.request()
-      .input('item', itemId)
-      .query(`
-        SELECT pr.duenio
-        FROM itemsCatalogo ic
-        INNER JOIN productos pr ON pr.identificador = ic.producto
-        WHERE ic.identificador = @item
-      `);
-
-    if (ownerRes.recordset.length > 0) {
-      const duenioId = Number(ownerRes.recordset[0].duenio);
-      if (!Number.isNaN(duenioId) && duenioId === Number(user.id)) {
-        res.status(403).json({ success: false, error: 'El dueño del producto no puede ofertar en su propia subasta' });
-        return;
-      }
-    }
-
-    // Get current best bid
-    const bestBid = await pool.request()
-      .input('item', itemId)
-      .query('SELECT TOP 1 importe FROM pujos WHERE item = @item ORDER BY importe DESC');
-
-    const currentBest = bestBid.recordset.length > 0
-      ? parseFloat(bestBid.recordset[0].importe)
-      : parseFloat(precioBase);
-
-    const base = parseFloat(precioBase);
-    const isHighCategory = categoria === 'oro' || categoria === 'platino';
-
-    if (importe <= currentBest) {
-      res.status(400).json({ success: false, error: `La puja debe ser mayor a ${currentBest}` });
-      return;
-    }
-
-    if (!isHighCategory) {
-      const minBid = currentBest + (base * 0.01);
-      const maxBid = currentBest + (base * 0.20);
-      if (importe < minBid) {
-        res.status(400).json({ success: false, error: `Puja minima: ${minBid.toFixed(2)} (ultima + 1% base)` });
-        return;
-      }
-      if (importe > maxBid) {
-        res.status(400).json({ success: false, error: `Puja maxima: ${maxBid.toFixed(2)} (ultima + 20% base)` });
-        return;
-      }
-    }
-
-    // Validate payment methods compatible with auction currency
-    const subastaMoneda = itemInfo.recordset[0].moneda || 'ARS';
-    const mediosCompat = await pool.request()
-      .input('cliente2', user.id)
-      .input('moneda', subastaMoneda)
-      .query(`
-        SELECT COUNT(*) as count FROM mediosDePago
-        WHERE cliente = @cliente2 AND verificado = 'si' AND activo = 'si'
-          AND moneda = @moneda
-      `);
-
-    if (mediosCompat.recordset[0].count === 0) {
-      res.status(400).json({ success: false, error: `No tiene medio de pago compatible con moneda ${subastaMoneda}` });
-      return;
-    }
-
-    // Get or create asistente
-    let asistenteId: number;
-    const existingAsistente = await pool.request()
-      .input('cliente', user.id)
-      .input('subasta', subastaId)
-      .query('SELECT identificador FROM asistentes WHERE cliente = @cliente AND subasta = @subasta');
-
-    if (existingAsistente.recordset.length > 0) {
-      asistenteId = existingAsistente.recordset[0].identificador;
-    } else {
-      const maxPostor = await pool.request()
-        .input('subasta', subastaId)
-        .query('SELECT COALESCE(MAX(numeroPostor), 0) + 1 as next FROM asistentes WHERE subasta = @subasta');
-
-      const result = await pool.request()
-        .input('numeroPostor', maxPostor.recordset[0].next)
-        .input('cliente', user.id)
-        .input('subasta', subastaId)
-        .query(`
-          INSERT INTO asistentes (numeroPostor, cliente, subasta)
-          OUTPUT INSERTED.identificador
-          VALUES (@numeroPostor, @cliente, @subasta)
-        `);
-      asistenteId = result.recordset[0].identificador;
-    }
-
-    const bidResult = await pool.request()
-      .input('asistente', asistenteId)
-      .input('item', itemId)
-      .input('importe', importe)
-      .query(`
-        INSERT INTO pujos (asistente, item, importe)
-        OUTPUT INSERTED.identificador
-        VALUES (@asistente, @item, @importe)
-      `);
-
-    // Try to emit via Socket.IO if available (lazy require to avoid circular imports)
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-var-requires
-      const { io } = require('../index');
-      if (io) {
-        io.to(`auction-${subastaId}`).emit('new-bid', {
-          bidId: bidResult.recordset[0].identificador,
-          itemId,
-          importe,
-          postorId: user.id,
-          postorNombre: user.email,
-          timestamp: new Date().toISOString(),
-        });
-      }
-    } catch (emitErr) {
-      console.warn('No se pudo emitir new-bid por Socket.IO desde endpoint REST:', (emitErr as any)?.message || emitErr);
-    }
-
-    res.json({ success: true, data: { bidId: bidResult.recordset[0].identificador } });
-  } catch (error) {
-    console.error('Error placeBid (REST):', error);
-    res.status(500).json({ success: false, error: 'Error al registrar la puja' });
-  }
-}
 
 // T302: GET /subastas
 export async function getSubastas(req: Request, res: Response): Promise<void> {
@@ -326,14 +143,21 @@ export async function getCatalogo(req: AuthRequest, res: Response): Promise<void
     const fotoMap = new Map<number, string>();
 
     if (productoIds.length > 0) {
-      const fotosResult = await pool.request()
+      const fotosReq = pool.request();
+      const placeholders = productoIds.map((pid: number, idx: number) => {
+        const param = `p${idx}`;
+        fotosReq.input(param, pid);
+        return `@${param}`;
+      });
+
+      const fotosResult = await fotosReq
         .query(`
           SELECT f.producto, f.foto, f.identificador
           FROM fotos f
           INNER JOIN (
             SELECT producto, MIN(identificador) as minId
             FROM fotos
-            WHERE producto IN (${productoIds.join(',')})
+            WHERE producto IN (${placeholders.join(',')})
             GROUP BY producto
           ) ff ON ff.producto = f.producto AND ff.minId = f.identificador
         `);

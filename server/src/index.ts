@@ -16,6 +16,9 @@ import notificacionesRoutes from './routes/notificaciones';
 import rateLimit from 'express-rate-limit';
 import { setupAuctionSocket } from './socket/auctionHandler';
 import { setupSwagger } from './swagger';
+import { validateEnv } from './config/env';
+import { startScheduler } from './services/scheduler';
+import type { NextFunction, Request, Response } from 'express';
 
 dotenv.config();
 
@@ -72,11 +75,26 @@ setupSwagger(app);
 // Socket.IO — Auction handler
 setupAuctionSocket(io);
 
+// Background scheduler (multas vencidas 72hs -> justicia). No-op en test.
+startScheduler();
+
+// 404 handler para rutas /api no encontradas
+app.use('/api', (_req: Request, res: Response) => {
+  res.status(404).json({ success: false, error: 'Recurso no encontrado' });
+});
+
+// Error handler global de Express
+app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
+  console.error('[error] ', err);
+  res.status(500).json({ success: false, error: 'Error interno del servidor' });
+});
+
 // Export io for use in routes
 export { io, app };
 
 const PORT = process.env.PORT || 3000;
 if (process.env.NODE_ENV !== 'test') {
+  validateEnv(); // falla rapido si faltan secretos requeridos
   server.listen({ port: PORT, host: '0.0.0.0' }, () => {
     console.log(`Server corriendo en puerto ${PORT}`);
   });

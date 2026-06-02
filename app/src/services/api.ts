@@ -43,9 +43,11 @@ function resolveApiUrl(): string {
 }
 
 export const API_URL = resolveApiUrl();
-console.info(`[api] baseURL=${API_URL}`);
+if (__DEV__) {
+  console.info(`[api] baseURL=${API_URL}`);
+}
 
-const api = axios.create({ baseURL: API_URL });
+const api = axios.create({ baseURL: API_URL, timeout: 15000 });
 
 // Interceptor: agregar token a cada request
 api.interceptors.request.use(async (config) => {
@@ -70,9 +72,15 @@ api.interceptors.response.use(
         if (!refreshToken) throw new Error('No refresh token');
 
         const { data } = await axios.post(`${API_URL}/auth/refresh`, { refreshToken });
-        const newToken = data.data.accessToken;
+        const newToken = data?.data?.accessToken;
+        const newRefreshToken = data?.data?.refreshToken;
+        if (!newToken) throw new Error('Invalid refresh response');
 
+        // El backend ROTA el refresh token: guardar ambos tokens nuevos.
         await SecureStore.setItemAsync('accessToken', newToken);
+        if (newRefreshToken) {
+          await SecureStore.setItemAsync('refreshToken', newRefreshToken);
+        }
         originalRequest.headers.Authorization = `Bearer ${newToken}`;
 
         return api(originalRequest);

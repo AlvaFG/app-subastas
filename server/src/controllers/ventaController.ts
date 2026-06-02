@@ -551,41 +551,52 @@ export async function upgradePolizaSolicitud(req: AuthRequest, res: Response): P
     // Determine currency to charge (use solicitud.moneda or default 'ARS')
     const monedaSubasta = solicitud.moneda === 'USD' ? 'USD' : 'ARS';
 
-    // Try to find a verified, active payment method for the user in the auction currency with enough balance
-    const mediosRes = await pool.request()
-      .input('cliente', req.user!.id)
-      .input('moneda', monedaSubasta)
-      .query(`
-        SELECT identificador, montoDisponible, moneda, tipo
-        FROM mediosDePago
-        WHERE cliente = @cliente AND verificado = 'si' AND activo = 'si' AND moneda = @moneda
-        ORDER BY montoDisponible DESC
-      `);
-
-    const medios = mediosRes.recordset;
-    let medioElegido: any = null;
-    for (const m of medios) {
-      const disponible = Number(m.montoDisponible || 0);
-      if (disponible >= diferencia) { medioElegido = m; break; }
-    }
-
-    if (!medioElegido) {
-      res.status(400).json({ success: false, error: `No existe medio de pago en ${monedaSubasta} con saldo suficiente` });
+    // BUG-01: el medio de pago lo elige el usuario (body.medioPagoId). No se
+    // puede auto-seleccionar uno cualquiera: hay que validar el seleccionado.
+    const medioPagoId = req.body?.medioPagoId;
+    if (medioPagoId === undefined || medioPagoId === null || `${medioPagoId}`.trim() === '') {
+      res.status(400).json({ success: false, error: 'Debe seleccionar un medio de pago' });
       return;
     }
 
-    // Deduct the difference from the chosen payment method
-    const nuevoSaldo = Number(medioElegido.montoDisponible || 0) - diferencia;
-    if (nuevoSaldo < 0) {
+    // Validar que el medio pertenece al cliente y esta verificado/activo,
+    // de forma analoga a confirm-payment en el socket.
+    const medioRes = await pool.request()
+      .input('medioId', medioPagoId)
+      .input('cliente', req.user!.id)
+      .query(`
+        SELECT identificador, montoDisponible, moneda, tipo, internacional
+        FROM mediosDePago
+        WHERE identificador = @medioId AND cliente = @cliente
+          AND verificado = 'si' AND activo = 'si'
+      `);
+
+    if (medioRes.recordset.length === 0) {
+      res.status(400).json({ success: false, error: 'Medio de pago no valido' });
+      return;
+    }
+
+    const medioElegido = medioRes.recordset[0];
+
+    // El medio debe ser compatible con la moneda del cobro.
+    if (medioElegido.moneda !== monedaSubasta) {
+      res.status(400).json({ success: false, error: `El medio de pago debe estar en ${monedaSubasta}` });
+      return;
+    }
+
+    // Saldo suficiente para cubrir la diferencia de premio.
+    const disponible = Number(medioElegido.montoDisponible || 0);
+    if (disponible < diferencia) {
       res.status(400).json({ success: false, error: 'Saldo insuficiente en el medio seleccionado' });
       return;
     }
 
+    // Descontar la diferencia del medio elegido (mismo patron que confirm-payment).
     await pool.request()
-      .input('idMedio', medioElegido.identificador)
-      .input('nuevoMonto', nuevoSaldo)
+      .input('medioId', medioElegido.identificador)
+      .input('diferencia', diferencia)
       .query(`
-        UPDATE mediosDePago SET montoDisponible = @nuevoMonto WHERE identificador = @idMedio
+        UPDATE mediosDePago SET montoDisponible = montoDisponible - @diferencia WHERE identificador = @medioId
       `);
 
     // Apply new policy to product

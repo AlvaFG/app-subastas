@@ -12,6 +12,8 @@ import { colors, fonts, fontSizes, spacing, radius, shadows, duration } from '..
 import { connectSocket, getSocket, disconnectSocket } from '../../../src/services/socket';
 import { useAuthStore } from '../../../src/store/authStore';
 import api from '../../../src/services/api';
+import { getApiErrorMessage } from '../../../src/utils/apiError';
+import type { MedioPago } from '../../../src/types';
 
 interface Bid {
   bidId: number;
@@ -34,21 +36,70 @@ interface CurrentItem {
   }[];
 }
 
-interface MedioPagoOption {
-  identificador: number;
-  tipo: string;
-  descripcion: string;
-  moneda: string;
-  internacional: string;
+// Medio de pago ofrecido al ganador (incluye monto disponible calculado por el backend).
+interface MedioPagoOption extends MedioPago {
   montoDisponible: number;
 }
+
+// Item ganado: payload del evento 'you-won'.
+interface WonItem {
+  itemId: number;
+  importe: number;
+  comision: number;
+  costoEnvio?: number;
+  total?: number;
+  medios?: MedioPagoOption[];
+}
+
+// Ack generico de los callbacks de socket.
+interface SocketAck<T = unknown> {
+  success: boolean;
+  data?: T;
+  error?: string;
+  code?: string;
+}
+
+// Respuesta del ack de 'join-auction'.
+interface JoinAuctionData {
+  canBid: boolean;
+  reason: string | null;
+  moneda?: string;
+  currentBid?: {
+    item: CurrentItem;
+    bestBid?: { importe: number; postorNombre: string } | null;
+  } | null;
+}
+
+// Payloads de eventos del servidor.
+interface ItemSoldPayload {
+  ganadorNombre: string;
+  importe: number;
+}
+
+interface ItemPaymentCancelledPayload {
+  bidId: number;
+  bestBid?: number | null;
+  bestBidder?: string | null;
+  closeInMs?: number | null;
+}
+
+interface CancelPaymentData {
+  bestBid?: number | null;
+  bestBidder?: string | null;
+}
+
+// Estado de la conexion del socket en vivo.
+type ConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
+
+// Tiempo maximo de espera del ack de una puja antes de liberar el boton.
+const BID_ACK_TIMEOUT_MS = 10000;
 
 export default function LiveAuctionScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const subastaId = parseInt(id);
   const user = useAuthStore((s) => s.user);
 
-  const [connected, setConnected] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<ConnectionStatus>('connecting');
   const [canBid, setCanBid] = useState(false);
   const [bidReason, setBidReason] = useState<string | null>(null);
   const [currentItem, setCurrentItem] = useState<CurrentItem | null>(null);
@@ -56,16 +107,21 @@ export default function LiveAuctionScreen() {
   const [bestBidder, setBestBidder] = useState<string>('');
   const [bids, setBids] = useState<Bid[]>([]);
   const [bidInput, setBidInput] = useState('');
-  const [sending, setSending] = useState(false);
+  const [isBidding, setIsBidding] = useState(false);
   const [moneda, setMoneda] = useState('ARS');
   const [showPaymentModal, setShowPaymentModal] = useState(false);
-  const [wonItem, setWonItem] = useState<any>(null);
+  const [wonItem, setWonItem] = useState<WonItem | null>(null);
   const [selectedMedioPagoId, setSelectedMedioPagoId] = useState<number | null>(null);
   const [closingInMs, setClosingInMs] = useState<number | null>(null);
   const [currentCategory, setCurrentCategory] = useState<string>('comun');
   const [cancellingPayment, setCancellingPayment] = useState(false);
   const [minBid, setMinBid] = useState<number | null>(null);
   const [maxBid, setMaxBid] = useState<number | null>(null);
+
+  // Timeout del ack de la puja en curso (A5-07): libera el boton si no llega confirmacion.
+  const bidTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const connected = connectionStatus === 'connected';
 
   // Animation for price pulse
   const priceScale = useSharedValue(1);
@@ -83,31 +139,66 @@ export default function LiveAuctionScreen() {
   useEffect(() => {
     let mounted = true;
 
+    // A5-09: aplica el ack de join-auction, tolerando un ack ausente/undefined.
+    const applyJoinAck = (response?: SocketAck<JoinAuctionData>) => {
+      if (!mounted) return;
+      if (!response) {
+        Alert.alert('Error', 'No se recibio respuesta del servidor al unirse a la subasta.');
+        return;
+      }
+      if (response.success && response.data) {
+        const data = response.data;
+        setConnectionStatus('connected');
+        setCanBid(data.canBid);
+        setBidReason(data.reason);
+        setMoneda(data.moneda || 'ARS');
+        if (data.currentBid) {
+          const item = data.currentBid.item;
+          setCurrentItem(item);
+          setCurrentCategory(item.subastaCat || 'comun');
+          if (data.currentBid.bestBid != null) {
+            setBestBid(data.currentBid.bestBid.importe);
+            setBestBidder(data.currentBid.bestBid.postorNombre);
+          } else {
+            setBestBid(item.precioBase);
+          }
+        }
+      } else {
+        Alert.alert('Error', response.error || 'No se pudo unir a la subasta');
+      }
+    };
+
+    const joinAuction = (socket: ReturnType<typeof getSocket>) => {
+      if (!socket) return;
+      socket.emit('join-auction', subastaId, applyJoinAck);
+    };
+
     (async () => {
       try {
         const socket = await connectSocket();
+        if (!mounted) return;
 
-        socket.emit('join-auction', subastaId, (response: any) => {
+        setConnectionStatus(socket.connected ? 'connected' : 'connecting');
+
+        // A5-01 + A5-08: estado de conexion del socket.
+        socket.on('connect', () => {
           if (!mounted) return;
-          if (response.success) {
-            setConnected(true);
-            setCanBid(response.data.canBid);
-            setBidReason(response.data.reason);
-            setMoneda(response.data.moneda || 'ARS');
-            if (response.data.currentBid) {
-              setCurrentItem(response.data.currentBid.item);
-              setCurrentCategory(response.data.currentBid.item.subastaCat || 'comun');
-              if (response.data.currentBid.bestBid) {
-                setBestBid(response.data.currentBid.bestBid.importe);
-                setBestBidder(response.data.currentBid.bestBid.postorNombre);
-              } else {
-                setBestBid(response.data.currentBid.item.precioBase);
-              }
-            }
-          } else {
-            Alert.alert('Error', response.error);
-          }
+          setConnectionStatus('connected');
+          // Re-sincroniza el estado de la subasta tras reconectar.
+          joinAuction(socket);
         });
+
+        socket.on('disconnect', () => {
+          if (!mounted) return;
+          setConnectionStatus('reconnecting');
+        });
+
+        socket.on('connect_error', () => {
+          if (!mounted) return;
+          setConnectionStatus((prev) => (prev === 'connected' ? 'reconnecting' : 'disconnected'));
+        });
+
+        joinAuction(socket);
 
         // Listen for new bids
         socket.on('new-bid', (bid: Bid) => {
@@ -123,7 +214,7 @@ export default function LiveAuctionScreen() {
           if (!mounted) return;
           try {
             const res = await api.get(`/subastas/items/${data.itemId}`);
-            const newItem = res.data.data;
+            const newItem: CurrentItem = res.data.data;
             setCurrentItem(newItem);
             setCurrentCategory(newItem.subastaCat || 'comun');
             setBids([]);
@@ -142,32 +233,32 @@ export default function LiveAuctionScreen() {
         });
 
         // Item sold
-        socket.on('item-sold', (data: any) => {
+        socket.on('item-sold', (data: ItemSoldPayload) => {
           if (!mounted) return;
           Alert.alert('VENDIDO', `${data.ganadorNombre} gano por ${formatPrice(data.importe)}`);
         });
 
         // T606: No bids — company bought
-        socket.on('item-no-bids', (data: any) => {
+        socket.on('item-no-bids', () => {
           if (!mounted) return;
           Alert.alert('Sin pujas', 'La empresa adquirio el item al precio base.');
         });
 
         // You won!
-        socket.on('you-won', (data: any) => {
+        socket.on('you-won', (data: WonItem) => {
           if (!mounted) return;
           setWonItem(data);
-          setSelectedMedioPagoId(data?.medios?.[0]?.identificador || null);
+          setSelectedMedioPagoId(data?.medios?.[0]?.identificador ?? null);
           setShowPaymentModal(true);
         });
 
-        socket.on('item-payment-cancelled', (data: any) => {
+        socket.on('item-payment-cancelled', (data: ItemPaymentCancelledPayload) => {
           if (!mounted) return;
           setShowPaymentModal(false);
           setWonItem(null);
           setSelectedMedioPagoId(null);
           setBids((prev) => prev.filter((bid) => bid.bidId !== data.bidId));
-          setBestBid(Number(data.bestBid || currentItem?.precioBase || 0));
+          setBestBid(Number(data.bestBid != null ? data.bestBid : (currentItem?.precioBase ?? 0)));
           setBestBidder(data.bestBidder || '');
           setClosingInMs(data.closeInMs ?? null);
         });
@@ -180,8 +271,10 @@ export default function LiveAuctionScreen() {
           Alert.alert('Subasta cerrada', 'La subasta fue cerrada luego del pago final.');
         });
 
-      } catch (error: any) {
-        const msg = error?.message || 'No se pudo conectar a la subasta';
+      } catch (error: unknown) {
+        if (!mounted) return;
+        setConnectionStatus('disconnected');
+        const msg = getApiErrorMessage(error, 'No se pudo conectar a la subasta');
         Alert.alert('Error', msg);
       }
     })();
@@ -191,8 +284,25 @@ export default function LiveAuctionScreen() {
       const socket = getSocket();
       if (socket) {
         socket.emit('leave-auction', subastaId);
+        // A5-05: remover TODOS los listeners para evitar fugas y duplicados.
+        socket.off('connect');
+        socket.off('disconnect');
+        socket.off('connect_error');
+        socket.off('new-bid');
+        socket.off('active-item-changed');
+        socket.off('item-close-scheduled');
+        socket.off('item-sold');
+        socket.off('item-no-bids');
+        socket.off('you-won');
+        socket.off('item-payment-cancelled');
+        socket.off('auction-closed');
       }
       disconnectSocket();
+      // A5-07: limpiar el timeout pendiente de la puja para evitar fugas.
+      if (bidTimeoutRef.current) {
+        clearTimeout(bidTimeoutRef.current);
+        bidTimeoutRef.current = null;
+      }
     };
   }, [subastaId]);
 
@@ -227,6 +337,9 @@ export default function LiveAuctionScreen() {
     `${moneda === 'USD' ? 'US$' : '$'} ${price.toLocaleString('es-AR', { minimumFractionDigits: 2 })}`;
 
   const handleBid = () => {
+    // A5-07 + REQ-10: no permitir una nueva puja hasta confirmar la anterior.
+    if (isBidding) return;
+
     const importe = parseFloat(bidInput);
     if (isNaN(importe) || importe <= 0) {
       Alert.alert('Error', 'Ingrese un monto valido');
@@ -245,33 +358,63 @@ export default function LiveAuctionScreen() {
       return;
     }
     if (!isHighCategory) {
-      const minBid = bestBid + (base * 0.01);
-      const maxBid = bestBid + (base * 0.20);
-      if (importe < minBid) {
-        Alert.alert('Puja rechazada', `Puja minima: ${minBid.toFixed(2)}`);
+      const minValido = bestBid + (base * 0.01);
+      const maxValido = bestBid + (base * 0.20);
+      if (importe < minValido) {
+        Alert.alert('Puja rechazada', `Puja minima: ${minValido.toFixed(2)}`);
         return;
       }
-      if (importe > maxBid) {
-        Alert.alert('Puja rechazada', `Puja maxima: ${maxBid.toFixed(2)}`);
+      if (importe > maxValido) {
+        Alert.alert('Puja rechazada', `Puja maxima: ${maxValido.toFixed(2)}`);
         return;
       }
     }
 
-    setSending(true);
     const socket = getSocket();
     if (!socket) {
-      setSending(false);
+      Alert.alert('Error', 'Sin conexion con la subasta');
       return;
     }
 
-    socket.emit('place-bid', { subastaId, itemId: currentItem?.identificador, importe }, (response: any) => {
-      setSending(false);
-      if (response.success) {
-        setBidInput('');
-      } else {
-        Alert.alert('Puja rechazada', response.error);
+    // Bloquea el boton hasta recibir el ack (o hasta el timeout).
+    setIsBidding(true);
+
+    let acked = false;
+    const clearBidTimeout = () => {
+      if (bidTimeoutRef.current) {
+        clearTimeout(bidTimeoutRef.current);
+        bidTimeoutRef.current = null;
       }
-    });
+    };
+
+    // A5-07: si no llega el ack en N ms, liberar el boton y avisar.
+    bidTimeoutRef.current = setTimeout(() => {
+      if (acked) return;
+      acked = true;
+      setIsBidding(false);
+      Alert.alert('Sin confirmacion', 'No se recibio confirmacion de la puja. Reintente.');
+    }, BID_ACK_TIMEOUT_MS);
+
+    socket.emit(
+      'place-bid',
+      { subastaId, itemId: currentItem.identificador, importe },
+      (response?: SocketAck<unknown>) => {
+        if (acked) return;
+        acked = true;
+        clearBidTimeout();
+        setIsBidding(false);
+        // A5-09: ack ausente -> error en vez de crash.
+        if (!response) {
+          Alert.alert('Error', 'No se recibio respuesta del servidor.');
+          return;
+        }
+        if (response.success) {
+          setBidInput('');
+        } else {
+          Alert.alert('Puja rechazada', response.error || 'No se pudo registrar la puja');
+        }
+      },
+    );
   };
 
   const confirmPayment = () => {
@@ -281,18 +424,28 @@ export default function LiveAuctionScreen() {
     }
     const socket = getSocket();
     if (!socket) return;
-    socket.emit('confirm-payment', { itemId: wonItem.itemId, medioPagoId: selectedMedioPagoId }, (response: any) => {
+    const total = wonItem.total ?? (wonItem.importe + wonItem.comision + (wonItem.costoEnvio ?? 0));
+    socket.emit('confirm-payment', { itemId: wonItem.itemId, medioPagoId: selectedMedioPagoId }, (response?: SocketAck<unknown>) => {
+      // A5-09: ack ausente -> error en vez de crash.
+      if (!response) {
+        Alert.alert('Error', 'No se recibio respuesta del servidor.');
+        return;
+      }
       if (response.success) {
-        Alert.alert('Pago confirmado', `Total pagado: ${formatPrice(wonItem.total || (wonItem.importe + wonItem.comision + wonItem.costoEnvio))}`);
+        Alert.alert('Pago confirmado', `Total pagado: ${formatPrice(total)}`);
         setShowPaymentModal(false);
         setWonItem(null);
-      } else {
-        if (typeof response.error === 'string' && response.error.toLowerCase().includes('multa aplicada')) {
-          setShowPaymentModal(false);
-          setWonItem(null);
-        }
-        Alert.alert('Pago rechazado', response.error);
+        return;
       }
+      // A5-03 + A5-11: detectar la multa por el code del backend, no por substring,
+      // y mostrar UN solo Alert (no ademas 'Pago rechazado').
+      if (response.code === 'MULTA_APLICADA') {
+        setShowPaymentModal(false);
+        setWonItem(null);
+        Alert.alert('Multa aplicada', response.error || 'Se aplico una multa por incumplimiento de pago.');
+        return;
+      }
+      Alert.alert('Pago rechazado', response.error || 'No se pudo confirmar el pago');
     });
   };
 
@@ -308,13 +461,15 @@ export default function LiveAuctionScreen() {
     }
 
     setCancellingPayment(true);
-    socket.emit('cancel-payment', { itemId: wonItem.itemId }, (response: any) => {
+    socket.emit('cancel-payment', { itemId: wonItem.itemId }, (response?: SocketAck<CancelPaymentData>) => {
       setCancellingPayment(false);
       if (response?.success) {
         setShowPaymentModal(false);
         setWonItem(null);
         setSelectedMedioPagoId(null);
-        setBestBid(Number(response.data?.bestBid || currentItem?.precioBase || 0));
+        // A5-04: tratar 0 como valor valido (no como ausencia).
+        const nuevoBestBid = response.data?.bestBid;
+        setBestBid(Number(nuevoBestBid != null ? nuevoBestBid : (currentItem?.precioBase ?? 0)));
         setBestBidder(response.data?.bestBidder || '');
       } else {
         Alert.alert('Error', response?.error || 'No se pudo cancelar el pago');
@@ -345,6 +500,20 @@ export default function LiveAuctionScreen() {
     </View>
   );
 
+  // A5-01 + A5-08: descripcion clara del estado de conexion para la UI.
+  const connectionLabel: Record<ConnectionStatus, string> = {
+    connecting: 'Conectando a la subasta...',
+    connected: 'Conectado en vivo',
+    reconnecting: 'Conexion perdida. Reconectando...',
+    disconnected: 'Sin conexion con la subasta',
+  };
+  const connectionDotStyle =
+    connectionStatus === 'connected'
+      ? styles.dotConnected
+      : connectionStatus === 'reconnecting' || connectionStatus === 'connecting'
+        ? styles.dotReconnecting
+        : styles.dotDisconnected;
+
   return (
     <KeyboardAvoidingView
       style={styles.container}
@@ -355,11 +524,23 @@ export default function LiveAuctionScreen() {
       {/* Header */}
       <View style={styles.header}>
         <View style={styles.headerLeft}>
-          <View style={[styles.liveIndicator, connected && styles.liveActive]} />
+          <View style={[styles.liveIndicator, connectionDotStyle]} />
           <Text style={styles.headerTitle}>Subasta #{id}</Text>
         </View>
         <Text style={styles.headerMoneda}>{moneda}</Text>
       </View>
+
+      {/* A5-01 + A5-08: estado de conexion del socket con mensaje claro */}
+      {!connected && (
+        <View
+          style={[
+            styles.connectionBanner,
+            connectionStatus === 'disconnected' ? styles.connectionBannerError : styles.connectionBannerWarn,
+          ]}
+        >
+          <Text style={styles.connectionBannerText}>{connectionLabel[connectionStatus]}</Text>
+        </View>
+      )}
 
       {/* Current item */}
       {currentItem ? (
@@ -433,7 +614,8 @@ export default function LiveAuctionScreen() {
           <Button
             title="Pujar"
             onPress={handleBid}
-            loading={sending}
+            loading={isBidding}
+            disabled={!connected}
             size="md"
             style={styles.bidButton}
           />
@@ -501,9 +683,16 @@ const styles = StyleSheet.create({
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: spacing.lg, paddingTop: spacing['2xl'], paddingBottom: spacing.md },
   headerLeft: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
   liveIndicator: { width: 8, height: 8, borderRadius: 4, backgroundColor: colors.textMuted },
-  liveActive: { backgroundColor: colors.alertEmber },
+  dotConnected: { backgroundColor: colors.bidGreen },
+  dotReconnecting: { backgroundColor: colors.auctionGold },
+  dotDisconnected: { backgroundColor: colors.alertEmber },
   headerTitle: { fontFamily: fonts.headingSemibold, fontSize: fontSizes.lg, color: colors.ivory },
   headerMoneda: { fontFamily: fonts.bodyMedium, fontSize: fontSizes.sm, color: colors.textMuted },
+
+  connectionBanner: { marginHorizontal: spacing.lg, marginBottom: spacing.md, paddingVertical: spacing.sm, paddingHorizontal: spacing.md, borderRadius: radius.md, alignItems: 'center' },
+  connectionBannerWarn: { backgroundColor: colors.goldGlow },
+  connectionBannerError: { backgroundColor: colors.alertEmber },
+  connectionBannerText: { fontFamily: fonts.bodyMedium, fontSize: fontSizes.sm, color: colors.ivory },
 
   itemSection: { paddingHorizontal: spacing.lg, paddingBottom: spacing.lg },
   itemTitle: { fontFamily: fonts.headingSemibold, fontSize: fontSizes.xl, color: colors.ivory },

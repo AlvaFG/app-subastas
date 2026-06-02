@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { body } from 'express-validator';
-import { registerStep1, registerStep2, login, refreshToken, getMe } from '../controllers/authController';
+import { registerStep1, registerStep2, login, refreshToken, logout, getMe } from '../controllers/authController';
 import { authGuard } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 
@@ -43,6 +43,13 @@ router.post('/refresh',
   body('refreshToken').notEmpty().withMessage('Refresh token requerido'),
   validate,
   refreshToken,
+);
+
+// Logout (revoca refresh token)
+router.post('/logout',
+  body('refreshToken').notEmpty().withMessage('Refresh token requerido'),
+  validate,
+  logout,
 );
 
 // Get current user

@@ -53,11 +53,17 @@ describe('Auth E2E', () => {
     };
 
     it('should register step1 successfully', async () => {
-      // First query: check existing → none found
+      // 1) check existing documento → none found
       mockQuery.mockResolvedValueOnce({ recordset: [] });
-      // Second query: insert persona
+      // 2) lookup verificador (empleado) → BSEC-02: id real en vez de hardcodear 1
+      mockQuery.mockResolvedValueOnce({ recordset: [{ identificador: 1 }] });
+      // 3) insert persona
       mockQuery.mockResolvedValueOnce({ recordset: [{ identificador: 42 }] });
-      // Third query: insert cliente
+      // 4) check numeroPais existe
+      mockQuery.mockResolvedValueOnce({ recordset: [{ numero: 1 }] });
+      // 5) insert cliente
+      mockQuery.mockResolvedValueOnce({ recordset: [] });
+      // 6) insert documentosCliente (REQ-02: persistir fotos del documento)
       mockQuery.mockResolvedValueOnce({ recordset: [] });
 
       const res = await request(app)

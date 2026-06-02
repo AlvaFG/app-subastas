@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { body } from 'express-validator';
-import { getMediosPago, createMedioPago, updateMedioPago, updateSaldoMedioPago, deleteMedioPago } from '../controllers/mediosPagoController';
+import { getMediosPago, createMedioPago, updateMedioPago, verificarMedioPago, updateSaldoMedioPago, deleteMedioPago } from '../controllers/mediosPagoController';
 import { authGuard } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 
@@ -16,6 +16,12 @@ router.post('/',
   body('montoDisponible').optional().isFloat({ min: 0 }).withMessage('Monto invalido'),
   validate,
   createMedioPago,
+);
+
+router.put('/:id/verificar',
+  body('verificado').isIn(['si', 'no']).withMessage('Verificado invalido'),
+  validate,
+  verificarMedioPago,
 );
 
 router.put('/:id/saldo',

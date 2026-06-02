@@ -52,7 +52,7 @@
 
 ### db-architect
 - **Role:** Diseno y migraciones de base de datos
-- **Context:** `EstructuraActual.sql`, milestone.md (DB Design Notes)
+- **Context:** `server/unified-migrations.sql`, milestone.md (DB Design Notes)
 - **Rules:** Nunca DROP sin confirmacion. Siempre generar scripts reversibles (UP/DOWN). Respetar naming conventions del schema existente (camelCase).
 
 ### api-developer

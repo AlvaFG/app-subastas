@@ -4,8 +4,8 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { Button, Input } from '../../../src/components';
 import { colors, fonts, fontSizes, spacing } from '../../../src/theme';
 import { useAuthStore } from '../../../src/store/authStore';
-
-const MIN_PASSWORD_LENGTH = 8;
+import { isValidEmail, validatePassword, PASSWORD_MIN_LENGTH } from '../../../src/utils/validators';
+import { getApiErrorMessage } from '../../../src/utils/apiError';
 
 export default function RegisterStep2Screen() {
   const { identificador: identificadorParam } = useLocalSearchParams<{ identificador?: string }>();
@@ -23,8 +23,13 @@ export default function RegisterStep2Screen() {
       setError('Complete todos los campos');
       return;
     }
-    if (clave.length < MIN_PASSWORD_LENGTH) {
-      setError(`La clave debe tener al menos ${MIN_PASSWORD_LENGTH} caracteres`);
+    if (!isValidEmail(email)) {
+      setError('Ingrese un email valido');
+      return;
+    }
+    const claveError = validatePassword(clave);
+    if (claveError) {
+      setError(claveError);
       return;
     }
     if (clave !== confirmarClave) {
@@ -43,8 +48,8 @@ export default function RegisterStep2Screen() {
         'Ya puede iniciar sesion con su email y clave.',
         [{ text: 'Ir a Login', onPress: () => router.replace('/(auth)/login') }],
       );
-    } catch (err: any) {
-      setError(err.response?.data?.error || 'Error al completar registro');
+    } catch (err) {
+      setError(getApiErrorMessage(err, 'Error al completar registro'));
     } finally {
       setLoading(false);
     }
@@ -76,7 +81,7 @@ export default function RegisterStep2Screen() {
       <Input
         label="Clave"
         leftIcon="lock-closed-outline"
-        placeholder={`Minimo ${MIN_PASSWORD_LENGTH} caracteres`}
+        placeholder={`Minimo ${PASSWORD_MIN_LENGTH} caracteres`}
         value={clave}
         onChangeText={setClave}
         isPassword

@@ -4,6 +4,60 @@ import jwt from 'jsonwebtoken';
 import sql from 'mssql';
 import { connectDB } from '../models/db';
 import { AuthRequest } from '../middleware/auth';
+import { getJwtSecret, getJwtRefreshSecret } from '../config/env';
+import { uploadImage, toBuffer } from '../services/cloudinary';
+
+const ACCESS_TTL = '1h';
+const REFRESH_TTL = '7d';
+const REFRESH_TTL_DAYS = 7;
+
+// Brute-force protection (BSEC-05): lock an account after repeated failures.
+const MAX_FAILED_ATTEMPTS = 5;
+const LOCK_MINUTES = 15;
+
+interface TokenPayload {
+  id: number;
+  email: string;
+  categoria: string;
+  admitido: string;
+}
+
+function signTokens(payload: TokenPayload): { accessToken: string; refreshToken: string } {
+  const accessToken = jwt.sign(payload, getJwtSecret(), { expiresIn: ACCESS_TTL });
+  const refreshToken = jwt.sign(payload, getJwtRefreshSecret(), { expiresIn: REFRESH_TTL });
+  return { accessToken, refreshToken };
+}
+
+/** Persist the registrant's ID document photos (REQ-02 / BSEC-03). */
+async function saveDocumentPhotos(
+  pool: sql.ConnectionPool,
+  cliente: number,
+  fotoFrente?: string,
+  fotoDorso?: string
+): Promise<void> {
+  if (!fotoFrente || !fotoDorso) return;
+
+  // Prefer Cloudinary; fall back to raw bytes so the photos are never dropped.
+  const urlFrente = await uploadImage(fotoFrente, 'documentos').catch(() => null);
+  const urlDorso = await uploadImage(fotoDorso, 'documentos').catch(() => null);
+
+  const request = pool.request().input('cliente', cliente);
+  if (urlFrente && urlDorso) {
+    request.input('urlFrente', urlFrente).input('urlDorso', urlDorso);
+    await request.query(`
+      INSERT INTO documentosCliente (cliente, urlFrente, urlDorso)
+      VALUES (@cliente, @urlFrente, @urlDorso)
+    `);
+  } else {
+    request
+      .input('fotoFrente', sql.VarBinary(sql.MAX), toBuffer(fotoFrente))
+      .input('fotoDorso', sql.VarBinary(sql.MAX), toBuffer(fotoDorso));
+    await request.query(`
+      INSERT INTO documentosCliente (cliente, fotoFrente, fotoDorso)
+      VALUES (@cliente, @fotoFrente, @fotoDorso)
+    `);
+  }
+}
 
 // T202: POST /auth/register/step1
 export async function registerStep1(req: Request, res: Response): Promise<void> {
@@ -22,6 +76,21 @@ export async function registerStep1(req: Request, res: Response): Promise<void> 
       res.status(400).json({ success: false, error: 'El documento ya esta registrado' });
       return;
     }
+
+    // verificador: use a real, existing empleado instead of a hardcoded id (BSEC-02).
+    // NOTE (academic simplification): there is no external-investigation admin panel,
+    // so registration auto-admits the client and assigns the system's first empleado
+    // as verificador. The category stays 'comun' until upgraded by activity.
+    const verificadorResult = await pool.request()
+      .query('SELECT TOP 1 identificador FROM empleados ORDER BY identificador');
+    if (verificadorResult.recordset.length === 0) {
+      res.status(500).json({
+        success: false,
+        error: 'No hay empleados configurados para verificar el registro',
+      });
+      return;
+    }
+    const verificadorId = verificadorResult.recordset[0].identificador;
 
     // Insertar persona
     const personaResult = await pool.request()
@@ -53,14 +122,14 @@ export async function registerStep1(req: Request, res: Response): Promise<void> 
       }
     }
 
-    // Auto-aprobar al usuario al completar etapa 1 si supera las validaciones de entrada.
+    // Auto-aprobar al usuario al completar etapa 1 (simplificacion academica: no hay
+    // investigacion externa). La categoria base es 'comun'; nunca se asigna al azar.
     const insertReq = pool.request()
       .input('identificador', personaId)
       .input('admitido', 'si')
       .input('categoria', 'comun')
-      .input('verificador', 1); // TODO: asignar verificador real
+      .input('verificador', verificadorId);
 
-    // Si existe un numeroPais valido, adjuntarlo con tipo Int, sino pasar NULL
     if (numeroPaisToInsert !== null) {
       insertReq.input('numeroPais', sql.Int, numeroPaisToInsert);
     } else {
@@ -72,7 +141,12 @@ export async function registerStep1(req: Request, res: Response): Promise<void> 
       VALUES (@identificador, @numeroPais, @admitido, @categoria, @verificador)
     `);
 
-    // TODO: Guardar fotos documento en Cloudinary (fotoFrente, fotoDorso)
+    // Persistir las fotos del documento (REQ-02). No bloquea el registro si falla.
+    try {
+      await saveDocumentPhotos(pool, personaId, fotoFrente, fotoDorso);
+    } catch (photoError) {
+      console.error('Error guardando fotos de documento:', photoError);
+    }
 
     res.status(201).json({
       success: true,
@@ -92,8 +166,6 @@ export async function registerStep1(req: Request, res: Response): Promise<void> 
 export async function registerStep2(req: Request, res: Response): Promise<void> {
   try {
     const { identificador, email, clave } = req.body;
-    const categoriasDisponibles = ['comun', 'especial', 'plata', 'oro', 'platino'];
-    const categoriaAsignada = categoriasDisponibles[Math.floor(Math.random() * categoriasDisponibles.length)];
 
     const pool = await connectDB();
 
@@ -101,7 +173,7 @@ export async function registerStep2(req: Request, res: Response): Promise<void> 
     const cliente = await pool.request()
       .input('identificador', identificador)
       .query(`
-        SELECT c.identificador, c.admitido, c.email
+        SELECT c.identificador, c.admitido, c.email, c.categoria
         FROM clientes c
         WHERE c.identificador = @identificador
       `);
@@ -121,17 +193,17 @@ export async function registerStep2(req: Request, res: Response): Promise<void> 
       return;
     }
 
-    // Hashear clave y guardar
+    // Hashear clave y guardar. La categoria NO se toca aqui: queda la 'comun'
+    // asignada en etapa 1 (BSEC-01/REQ-01: nunca se asigna al azar).
     const claveHash = await bcrypt.hash(clave, 10);
 
     await pool.request()
       .input('identificador', identificador)
       .input('email', email)
       .input('claveHash', claveHash)
-      .input('categoria', categoriaAsignada)
       .query(`
         UPDATE clientes
-        SET email = @email, claveHash = @claveHash, categoria = @categoria
+        SET email = @email, claveHash = @claveHash
         WHERE identificador = @identificador
       `);
 
@@ -139,7 +211,7 @@ export async function registerStep2(req: Request, res: Response): Promise<void> 
       success: true,
       data: {
         mensaje: 'Registro completado. Ya puede iniciar sesion.',
-        categoria: categoriaAsignada,
+        categoria: cliente.recordset[0].categoria,
       },
     });
   } catch (error) {
@@ -159,6 +231,7 @@ export async function login(req: Request, res: Response): Promise<void> {
       .input('email', email)
       .query(`
         SELECT c.identificador, c.email, c.claveHash, c.categoria, c.admitido,
+               c.failedAttempts, c.lockUntil,
                p.nombre, p.estado
         FROM clientes c
         INNER JOIN personas p ON p.identificador = c.identificador
@@ -177,6 +250,15 @@ export async function login(req: Request, res: Response): Promise<void> {
       return;
     }
 
+    // Bloqueo temporal por intentos fallidos (BSEC-05)
+    if (user.lockUntil && new Date(user.lockUntil) > new Date()) {
+      res.status(403).json({
+        success: false,
+        error: 'Cuenta bloqueada temporalmente por intentos fallidos. Intente mas tarde.',
+      });
+      return;
+    }
+
     // Verificar multas impagas derivadas a justicia
     const multasBlock = await pool.request()
       .input('cliente', user.identificador)
@@ -192,27 +274,38 @@ export async function login(req: Request, res: Response): Promise<void> {
 
     const validPassword = await bcrypt.compare(clave, user.claveHash);
     if (!validPassword) {
+      const attempts = (user.failedAttempts || 0) + 1;
+      const lockUntil = attempts >= MAX_FAILED_ATTEMPTS
+        ? new Date(Date.now() + LOCK_MINUTES * 60 * 1000)
+        : null;
+      await pool.request()
+        .input('id', user.identificador)
+        .input('attempts', attempts)
+        .input('lockUntil', sql.DateTime, lockUntil)
+        .query('UPDATE clientes SET failedAttempts = @attempts, lockUntil = @lockUntil WHERE identificador = @id');
       res.status(401).json({ success: false, error: 'Credenciales invalidas' });
       return;
     }
 
-    const payload = {
+    // Login correcto: resetear contador de intentos
+    if (user.failedAttempts > 0 || user.lockUntil) {
+      await pool.request()
+        .input('id', user.identificador)
+        .query('UPDATE clientes SET failedAttempts = 0, lockUntil = NULL WHERE identificador = @id');
+    }
+
+    const payload: TokenPayload = {
       id: user.identificador,
       email: user.email,
       categoria: user.categoria,
       admitido: user.admitido,
     };
 
-    if (!process.env.JWT_SECRET || !process.env.JWT_REFRESH_SECRET) {
-      throw new Error('JWT secrets not configured');
-    }
-
-    const accessToken = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1h' });
-    const refreshToken = jwt.sign(payload, process.env.JWT_REFRESH_SECRET, { expiresIn: '7d' });
+    const { accessToken, refreshToken } = signTokens(payload);
 
     // Guardar refresh token en sesiones
     const expiracion = new Date();
-    expiracion.setDate(expiracion.getDate() + 7);
+    expiracion.setDate(expiracion.getDate() + REFRESH_TTL_DAYS);
 
     await pool.request()
       .input('cliente', user.identificador)
@@ -242,7 +335,7 @@ export async function login(req: Request, res: Response): Promise<void> {
   }
 }
 
-// POST /auth/refresh
+// POST /auth/refresh — rotates the refresh token (BSEC-04)
 export async function refreshToken(req: Request, res: Response): Promise<void> {
   try {
     const { refreshToken: token } = req.body;
@@ -254,11 +347,10 @@ export async function refreshToken(req: Request, res: Response): Promise<void> {
 
     const pool = await connectDB();
 
-    // Verificar que el refresh token existe y esta activo
     const sesion = await pool.request()
       .input('refreshToken', token)
       .query(`
-        SELECT s.cliente, s.fechaExpiracion, c.email, c.categoria, c.admitido
+        SELECT s.identificador, s.cliente, s.fechaExpiracion, c.email, c.categoria, c.admitido
         FROM sesiones s
         INNER JOIN clientes c ON c.identificador = s.cliente
         WHERE s.refreshToken = @refreshToken AND s.activo = 'si'
@@ -271,32 +363,79 @@ export async function refreshToken(req: Request, res: Response): Promise<void> {
 
     const sesionData = sesion.recordset[0];
 
+    // Revocar la sesion si el token expiro, para evitar reuso.
     if (new Date(sesionData.fechaExpiracion) < new Date()) {
+      await pool.request()
+        .input('id', sesionData.identificador)
+        .query("UPDATE sesiones SET activo = 'no' WHERE identificador = @id");
       res.status(401).json({ success: false, error: 'Refresh token expirado' });
       return;
     }
 
-    if (!process.env.JWT_REFRESH_SECRET || !process.env.JWT_SECRET) {
-      throw new Error('JWT secrets not configured');
+    // Verificar firma. Si falla, revocar la sesion.
+    try {
+      jwt.verify(token, getJwtRefreshSecret());
+    } catch {
+      await pool.request()
+        .input('id', sesionData.identificador)
+        .query("UPDATE sesiones SET activo = 'no' WHERE identificador = @id");
+      res.status(401).json({ success: false, error: 'Refresh token invalido' });
+      return;
     }
 
-    const decoded = jwt.verify(token, process.env.JWT_REFRESH_SECRET) as any;
-
-    const payload = {
-      id: decoded.id,
+    const payload: TokenPayload = {
+      id: sesionData.cliente,
       email: sesionData.email,
       categoria: sesionData.categoria,
       admitido: sesionData.admitido,
     };
 
-    const newAccessToken = jwt.sign(payload, process.env.JWT_SECRET, { expiresIn: '1h' });
+    // Rotacion: emitir nuevos tokens, invalidar el refresh anterior.
+    const { accessToken, refreshToken: newRefreshToken } = signTokens(payload);
+    const expiracion = new Date();
+    expiracion.setDate(expiracion.getDate() + REFRESH_TTL_DAYS);
+
+    await pool.request()
+      .input('id', sesionData.identificador)
+      .query("UPDATE sesiones SET activo = 'no' WHERE identificador = @id");
+
+    await pool.request()
+      .input('cliente', sesionData.cliente)
+      .input('refreshToken', newRefreshToken)
+      .input('fechaExpiracion', expiracion)
+      .query(`
+        INSERT INTO sesiones (cliente, refreshToken, fechaExpiracion)
+        VALUES (@cliente, @refreshToken, @fechaExpiracion)
+      `);
 
     res.json({
       success: true,
-      data: { accessToken: newAccessToken },
+      data: { accessToken, refreshToken: newRefreshToken },
     });
-  } catch {
+  } catch (error) {
+    console.error('Error en refreshToken:', error);
     res.status(401).json({ success: false, error: 'Refresh token invalido' });
+  }
+}
+
+// POST /auth/logout — revokes a refresh token (BSEC-04)
+export async function logout(req: Request, res: Response): Promise<void> {
+  try {
+    const { refreshToken: token } = req.body;
+    if (!token) {
+      res.status(400).json({ success: false, error: 'Refresh token requerido' });
+      return;
+    }
+
+    const pool = await connectDB();
+    await pool.request()
+      .input('refreshToken', token)
+      .query("UPDATE sesiones SET activo = 'no' WHERE refreshToken = @refreshToken");
+
+    res.json({ success: true, data: { mensaje: 'Sesion cerrada' } });
+  } catch (error) {
+    console.error('Error en logout:', error);
+    res.status(500).json({ success: false, error: 'Error interno del servidor' });
   }
 }
 

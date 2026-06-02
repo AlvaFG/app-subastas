@@ -1,8 +1,9 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useRef, useState, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, FlatList, RefreshControl, TouchableOpacity, Image,
+  View, Text, StyleSheet, FlatList, RefreshControl, TouchableOpacity, Image, AppState,
 } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
+import axios from 'axios';
 import { Badge, CardSkeleton } from '../../src/components';
 import { CategoryName } from '../../src/components/Badge';
 import { colors, fonts, fontSizes, spacing, shadows, radius } from '../../src/theme';
@@ -29,22 +30,30 @@ export default function SubastasScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [filtro, setFiltro] = useState<string>('todas');
+  const abortRef = useRef<AbortController | null>(null);
 
   const fetchSubastas = useCallback(async () => {
+    // Cancela cualquier request en vuelo antes de iniciar uno nuevo
+    abortRef.current?.abort();
+    const controller = new AbortController();
+    abortRef.current = controller;
+
     try {
       const params: any = { page: 1, limit: 50 };
       if (filtro !== 'todas') params.estado = filtro;
-      const { data } = await api.get('/subastas', { params });
+      const { data } = await api.get('/subastas', { params, signal: controller.signal });
       setSubastas(data.data.subastas);
-    } catch {
+    } catch (err) {
+      if (axios.isCancel(err)) return; // request cancelado: no es un error real
       // silently fail if not connected
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      // Solo limpiamos los flags si este request sigue siendo el activo
+      if (abortRef.current === controller) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   }, [filtro]);
-
-  useEffect(() => { fetchSubastas(); }, [fetchSubastas]);
 
   // Refresh subastas when screen comes into focus (e.g., after approving a sale request)
   useFocusEffect(
@@ -52,10 +61,24 @@ export default function SubastasScreen() {
       fetchSubastas();
 
       const intervalId = setInterval(() => {
-        fetchSubastas();
+        // Solo hacemos polling cuando la app esta en primer plano
+        if (AppState.currentState === 'active') {
+          fetchSubastas();
+        }
       }, 8000);
 
-      return () => clearInterval(intervalId);
+      const appStateSub = AppState.addEventListener('change', (state) => {
+        // Al volver al primer plano, refrescamos inmediatamente
+        if (state === 'active') {
+          fetchSubastas();
+        }
+      });
+
+      return () => {
+        clearInterval(intervalId);
+        appStateSub.remove();
+        abortRef.current?.abort();
+      };
     }, [fetchSubastas])
   );
 

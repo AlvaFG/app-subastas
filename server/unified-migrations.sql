@@ -1,5 +1,7 @@
--- UNIFIED MIGRATIONS: Complete database schema
--- All tables, fixes, and new columns in one file
+-- UNIFIED MIGRATIONS (baseline 000): complete base database schema
+-- IDEMPOTENT: every object is guarded so this file can be re-run safely.
+-- Incremental changes live in server/migrations/NNN_*.sql and are tracked in
+-- the schema_version table by run-migrations.js.
 
 -- ============================================
 -- PHASE 1: Base schema (from EstructuraActual.sql)
@@ -7,6 +9,7 @@
 
 GO
 
+IF OBJECT_ID('paises', 'U') IS NULL
 CREATE TABLE paises(
 	numero int not null,
 	nombre varchar(250) not null,
@@ -17,6 +20,7 @@ CREATE TABLE paises(
 	constraint pk_paises primary key (numero)
 );
 
+IF OBJECT_ID('personas', 'U') IS NULL
 CREATE TABLE personas(
 	identificador int not null identity,
 	documento varchar(20) not null,
@@ -27,6 +31,7 @@ CREATE TABLE personas(
 	constraint pk_personas primary key (identificador)
 );
 
+IF OBJECT_ID('empleados', 'U') IS NULL
 CREATE TABLE empleados(
 	identificador int not null,
 	cargo varchar(100),
@@ -34,6 +39,7 @@ CREATE TABLE empleados(
 	constraint pk_empleados primary key (identificador)
 );
 
+IF OBJECT_ID('sectores', 'U') IS NULL
 CREATE TABLE sectores(
 	identificador int not null identity,
 	nombreSector varchar(150) not null,
@@ -43,6 +49,7 @@ CREATE TABLE sectores(
 	constraint fk_sectores_empleados foreign key (responsableSector) references empleados
 );
 
+IF OBJECT_ID('seguros', 'U') IS NULL
 CREATE TABLE seguros(
 	nroPoliza varchar(30) not null,
 	compania varchar(150) not null,
@@ -51,6 +58,7 @@ CREATE TABLE seguros(
 	constraint pk_seguro primary key (nroPoliza)
 );
 
+IF OBJECT_ID('clientes', 'U') IS NULL
 CREATE TABLE clientes(
 	identificador int not null,
 	numeroPais int,
@@ -63,6 +71,7 @@ CREATE TABLE clientes(
 	constraint fk_clientes_paises foreign key (numeroPais) references paises (numero)
 );
 
+IF OBJECT_ID('duenios', 'U') IS NULL
 CREATE TABLE duenios(
 	identificador int not null,
 	numeroPais int,
@@ -75,6 +84,7 @@ CREATE TABLE duenios(
 	constraint fk_duenios_empleados foreign key (verificador) references empleados (identificador)
 );
 
+IF OBJECT_ID('subastadores', 'U') IS NULL
 CREATE TABLE subastadores(
 	identificador int not null,
 	matricula varchar(15),
@@ -83,6 +93,7 @@ CREATE TABLE subastadores(
 	constraint fk_subastadores_personas foreign key (identificador) references personas
 );
 
+IF OBJECT_ID('subastas', 'U') IS NULL
 CREATE TABLE subastas(
 	identificador int not null identity,
 	fecha date constraint chkFecha check (fecha > dateAdd(dd, 10, getdate())),
@@ -98,6 +109,7 @@ CREATE TABLE subastas(
 	constraint fk_subastas_subastadores foreign key (subastador) references subastadores(identificador)
 );
 
+IF OBJECT_ID('productos', 'U') IS NULL
 CREATE TABLE productos(
 	identificador int not null identity,
 	fecha date,
@@ -112,6 +124,7 @@ CREATE TABLE productos(
 	constraint fk_productos_duenios foreign key (duenio) references duenios(identificador)
 );
 
+IF OBJECT_ID('fotos', 'U') IS NULL
 CREATE TABLE fotos(
 	identificador int not null identity,
 	producto int not null,
@@ -120,6 +133,7 @@ CREATE TABLE fotos(
 	constraint fk_fotos_productos foreign key (producto) references productos(identificador)
 );
 
+IF OBJECT_ID('catalogos', 'U') IS NULL
 CREATE TABLE catalogos(
 	identificador int not null identity,
 	descripcion varchar(250) not null,
@@ -130,6 +144,7 @@ CREATE TABLE catalogos(
 	constraint fk_catalogos_subastas foreign key (subasta) references subastas(identificador)
 );
 
+IF OBJECT_ID('itemsCatalogo', 'U') IS NULL
 CREATE TABLE itemsCatalogo(
 	identificador int not null identity,
 	catalogo int not null,
@@ -142,6 +157,7 @@ CREATE TABLE itemsCatalogo(
 	constraint fk_itemsCatalogo_productos foreign key (producto) references productos
 );
 
+IF OBJECT_ID('asistentes', 'U') IS NULL
 CREATE TABLE asistentes(
 	identificador int not null identity,
 	numeroPostor int not null,
@@ -152,6 +168,7 @@ CREATE TABLE asistentes(
 	constraint fk_asistentes_subasta foreign key (subasta) references subastas
 );
 
+IF OBJECT_ID('pujos', 'U') IS NULL
 CREATE TABLE pujos(
 	identificador int not null identity,
 	asistente int not null,
@@ -163,6 +180,7 @@ CREATE TABLE pujos(
 	constraint fk_pujos_itemsCatalogo foreign key (item) references itemsCatalogo
 );
 
+IF OBJECT_ID('registroDeSubasta', 'U') IS NULL
 CREATE TABLE registroDeSubasta(
 	identificador int not null identity,
 	subasta int not null,
@@ -178,30 +196,44 @@ CREATE TABLE registroDeSubasta(
 	constraint fk_registroDeSubasta_cliente foreign key (cliente) references clientes
 );
 
--- ============================================
--- PHASE 2: Fixes (from 001_fix_typos.sql)
--- ============================================
-
--- Fix 'incativo' -> 'inactivo' en personas.estado
-ALTER TABLE personas DROP CONSTRAINT chkEstado;
-ALTER TABLE personas ADD CONSTRAINT chkEstado CHECK (estado IN ('activo', 'inactivo'));
-
--- Fix 'carrada' -> 'cerrada' en subastas.estado
-ALTER TABLE subastas DROP CONSTRAINT chkES;
-ALTER TABLE subastas ADD CONSTRAINT chkES CHECK (estado IN ('abierta', 'cerrada'));
+GO
 
 -- ============================================
--- PHASE 3: New columns (from 002_nuevas_columnas.sql)
+-- PHASE 2: Constraint typo fixes (idempotent)
 -- ============================================
 
-ALTER TABLE subastas ADD moneda VARCHAR(3) CONSTRAINT chkMoneda CHECK (moneda IN ('ARS', 'USD')) DEFAULT 'ARS';
-ALTER TABLE clientes ADD email VARCHAR(250) NULL;
-ALTER TABLE clientes ADD claveHash VARCHAR(250) NULL;
+IF OBJECT_ID('chkEstado', 'C') IS NOT NULL
+	ALTER TABLE personas DROP CONSTRAINT chkEstado;
+GO
+IF OBJECT_ID('chkEstado', 'C') IS NULL
+	ALTER TABLE personas ADD CONSTRAINT chkEstado CHECK (estado IN ('activo', 'inactivo'));
+GO
+IF OBJECT_ID('chkES', 'C') IS NOT NULL
+	ALTER TABLE subastas DROP CONSTRAINT chkES;
+GO
+IF OBJECT_ID('chkES', 'C') IS NULL
+	ALTER TABLE subastas ADD CONSTRAINT chkES CHECK (estado IN ('abierta', 'cerrada'));
+GO
 
 -- ============================================
--- PHASE 4: New tables (from 003_nuevas_tablas.sql)
+-- PHASE 3: New columns on existing tables (idempotent)
 -- ============================================
 
+IF COL_LENGTH('subastas', 'moneda') IS NULL
+	ALTER TABLE subastas ADD moneda VARCHAR(3) CONSTRAINT chkMoneda CHECK (moneda IN ('ARS', 'USD')) DEFAULT 'ARS';
+GO
+IF COL_LENGTH('clientes', 'email') IS NULL
+	ALTER TABLE clientes ADD email VARCHAR(250) NULL;
+GO
+IF COL_LENGTH('clientes', 'claveHash') IS NULL
+	ALTER TABLE clientes ADD claveHash VARCHAR(250) NULL;
+GO
+
+-- ============================================
+-- PHASE 4: New tables (idempotent)
+-- ============================================
+
+IF OBJECT_ID('mediosDePago', 'U') IS NULL
 CREATE TABLE mediosDePago (
 	identificador INT NOT NULL IDENTITY,
 	cliente INT NOT NULL,
@@ -221,6 +253,7 @@ CREATE TABLE mediosDePago (
 	CONSTRAINT fk_mediosDePago_clientes FOREIGN KEY (cliente) REFERENCES clientes (identificador)
 );
 
+IF OBJECT_ID('sesiones', 'U') IS NULL
 CREATE TABLE sesiones (
 	identificador INT NOT NULL IDENTITY,
 	cliente INT NOT NULL,
@@ -232,6 +265,7 @@ CREATE TABLE sesiones (
 	CONSTRAINT fk_sesiones_clientes FOREIGN KEY (cliente) REFERENCES clientes (identificador)
 );
 
+IF OBJECT_ID('notificaciones', 'U') IS NULL
 CREATE TABLE notificaciones (
 	identificador INT NOT NULL IDENTITY,
 	cliente INT NOT NULL,
@@ -244,6 +278,7 @@ CREATE TABLE notificaciones (
 	CONSTRAINT fk_notificaciones_clientes FOREIGN KEY (cliente) REFERENCES clientes (identificador)
 );
 
+IF OBJECT_ID('multas', 'U') IS NULL
 CREATE TABLE multas (
 	identificador INT NOT NULL IDENTITY,
 	cliente INT NOT NULL,
@@ -261,6 +296,7 @@ CREATE TABLE multas (
 	CONSTRAINT fk_multas_items FOREIGN KEY (item) REFERENCES itemsCatalogo (identificador)
 );
 
+IF OBJECT_ID('solicitudesVenta', 'U') IS NULL
 CREATE TABLE solicitudesVenta (
 	identificador INT NOT NULL IDENTITY,
 	cliente INT NOT NULL,
@@ -277,6 +313,7 @@ CREATE TABLE solicitudesVenta (
 	CONSTRAINT fk_solicitudesVenta_clientes FOREIGN KEY (cliente) REFERENCES clientes (identificador)
 );
 
+IF OBJECT_ID('depositos', 'U') IS NULL
 CREATE TABLE depositos (
 	identificador INT NOT NULL IDENTITY,
 	nombre VARCHAR(150) NOT NULL,
@@ -284,9 +321,14 @@ CREATE TABLE depositos (
 	CONSTRAINT pk_depositos PRIMARY KEY (identificador)
 );
 
-ALTER TABLE productos ADD deposito INT NULL;
-ALTER TABLE productos ADD CONSTRAINT fk_productos_depositos FOREIGN KEY (deposito) REFERENCES depositos (identificador);
+IF COL_LENGTH('productos', 'deposito') IS NULL
+	ALTER TABLE productos ADD deposito INT NULL;
+GO
+IF OBJECT_ID('fk_productos_depositos', 'F') IS NULL
+	ALTER TABLE productos ADD CONSTRAINT fk_productos_depositos FOREIGN KEY (deposito) REFERENCES depositos (identificador);
+GO
 
+IF OBJECT_ID('cuentasAVista', 'U') IS NULL
 CREATE TABLE cuentasAVista (
 	identificador INT NOT NULL IDENTITY,
 	duenio INT NOT NULL,
@@ -303,88 +345,52 @@ CREATE TABLE cuentasAVista (
 
 GO
 
+-- ============================================
+-- PHASE 5: seguros enrichment + seed data (idempotent)
+-- ============================================
+
 IF COL_LENGTH('seguros', 'tipoPoliza') IS NULL
 	ALTER TABLE seguros ADD tipoPoliza VARCHAR(50) NULL;
-
+GO
 IF COL_LENGTH('seguros', 'valorBaseMin') IS NULL
 	ALTER TABLE seguros ADD valorBaseMin DECIMAL(18,2) NULL;
-
+GO
 IF COL_LENGTH('seguros', 'valorBaseMax') IS NULL
 	ALTER TABLE seguros ADD valorBaseMax DECIMAL(18,2) NULL;
-
+GO
 IF COL_LENGTH('seguros', 'depositoPreferido') IS NULL
 	ALTER TABLE seguros ADD depositoPreferido INT NULL;
-
+GO
 IF OBJECT_ID('fk_seguros_depositoPreferido', 'F') IS NULL
 	ALTER TABLE seguros ADD CONSTRAINT fk_seguros_depositoPreferido FOREIGN KEY (depositoPreferido) REFERENCES depositos (identificador);
-
+GO
 IF COL_LENGTH('solicitudesVenta', 'productoId') IS NULL
 	ALTER TABLE solicitudesVenta ADD productoId INT NULL;
-
+GO
 IF OBJECT_ID('fk_solicitudesVenta_productos', 'F') IS NULL
 	ALTER TABLE solicitudesVenta ADD CONSTRAINT fk_solicitudesVenta_productos FOREIGN KEY (productoId) REFERENCES productos (identificador);
-
+GO
 IF COL_LENGTH('productos', 'seguro') IS NULL
 	ALTER TABLE productos ADD seguro VARCHAR(30) NULL;
-
-IF COL_LENGTH('productos', 'deposito') IS NULL
-	ALTER TABLE productos ADD deposito INT NULL;
-
 GO
-
-UPDATE depositos
-SET nombre = 'Deposito Central', direccion = 'Av. Principal 100'
-WHERE identificador = 1;
-
-UPDATE depositos
-SET nombre = 'Deposito Norte', direccion = 'Calle Norte 50'
-WHERE identificador = 2;
-
-UPDATE depositos
-SET nombre = 'Deposito Sur', direccion = 'Ruta 5 Km 12'
-WHERE identificador = 3;
 
 IF NOT EXISTS (SELECT 1 FROM depositos WHERE nombre = 'Deposito Central')
 	INSERT INTO depositos (nombre, direccion) VALUES ('Deposito Central', 'Av. Principal 100');
-
 IF NOT EXISTS (SELECT 1 FROM depositos WHERE nombre = 'Deposito Norte')
 	INSERT INTO depositos (nombre, direccion) VALUES ('Deposito Norte', 'Calle Norte 50');
-
 IF NOT EXISTS (SELECT 1 FROM depositos WHERE nombre = 'Deposito Sur')
 	INSERT INTO depositos (nombre, direccion) VALUES ('Deposito Sur', 'Ruta 5 Km 12');
 
-UPDATE seguros
-SET compania = 'Cobertura Esencial', polizaCombinada = 'no', importe = 1000.00,
-	tipoPoliza = 'esencial', valorBaseMin = 0.01, valorBaseMax = 5000.00, depositoPreferido = 1
-WHERE nroPoliza = 'POL-1000';
-
-UPDATE seguros
-SET compania = 'Cobertura Estandar', polizaCombinada = 'no', importe = 5000.00,
-	tipoPoliza = 'estandar', valorBaseMin = 5000.01, valorBaseMax = 20000.00, depositoPreferido = 2
-WHERE nroPoliza = 'POL-5000';
-
-UPDATE seguros
-SET compania = 'Cobertura Extendida', polizaCombinada = 'no', importe = 10000.00,
-	tipoPoliza = 'extendida', valorBaseMin = 20000.01, valorBaseMax = 50000.00, depositoPreferido = 3
-WHERE nroPoliza = 'POL-10000';
-
-UPDATE seguros
-SET compania = 'Cobertura Premium', polizaCombinada = 'no', importe = 20000.00,
-	tipoPoliza = 'premium', valorBaseMin = 50000.01, valorBaseMax = NULL, depositoPreferido = 3
-WHERE nroPoliza = 'POL-20000';
-
 IF NOT EXISTS (SELECT 1 FROM seguros WHERE nroPoliza = 'POL-1000')
 	INSERT INTO seguros (nroPoliza, compania, polizaCombinada, importe, tipoPoliza, valorBaseMin, valorBaseMax, depositoPreferido)
-	VALUES ('POL-1000', 'Cobertura Esencial', 'no', 1000.00, 'esencial', 0.01, 5000.00, 1);
-
+	VALUES ('POL-1000', 'Cobertura Esencial', 'no', 1000.00, 'esencial', 0.01, 5000.00, (SELECT TOP 1 identificador FROM depositos WHERE nombre = 'Deposito Central'));
 IF NOT EXISTS (SELECT 1 FROM seguros WHERE nroPoliza = 'POL-5000')
 	INSERT INTO seguros (nroPoliza, compania, polizaCombinada, importe, tipoPoliza, valorBaseMin, valorBaseMax, depositoPreferido)
-	VALUES ('POL-5000', 'Cobertura Estandar', 'no', 5000.00, 'estandar', 5000.01, 20000.00, 2);
-
+	VALUES ('POL-5000', 'Cobertura Estandar', 'no', 5000.00, 'estandar', 5000.01, 20000.00, (SELECT TOP 1 identificador FROM depositos WHERE nombre = 'Deposito Norte'));
 IF NOT EXISTS (SELECT 1 FROM seguros WHERE nroPoliza = 'POL-10000')
 	INSERT INTO seguros (nroPoliza, compania, polizaCombinada, importe, tipoPoliza, valorBaseMin, valorBaseMax, depositoPreferido)
-	VALUES ('POL-10000', 'Cobertura Extendida', 'no', 10000.00, 'extendida', 20000.01, 50000.00, 3);
-
+	VALUES ('POL-10000', 'Cobertura Extendida', 'no', 10000.00, 'extendida', 20000.01, 50000.00, (SELECT TOP 1 identificador FROM depositos WHERE nombre = 'Deposito Sur'));
 IF NOT EXISTS (SELECT 1 FROM seguros WHERE nroPoliza = 'POL-20000')
 	INSERT INTO seguros (nroPoliza, compania, polizaCombinada, importe, tipoPoliza, valorBaseMin, valorBaseMax, depositoPreferido)
-	VALUES ('POL-20000', 'Cobertura Premium', 'no', 20000.00, 'premium', 50000.01, NULL, 3);
+	VALUES ('POL-20000', 'Cobertura Premium', 'no', 20000.00, 'premium', 50000.01, NULL, (SELECT TOP 1 identificador FROM depositos WHERE nombre = 'Deposito Sur'));
+GO

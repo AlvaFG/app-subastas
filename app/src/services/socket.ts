@@ -19,6 +19,11 @@ export async function connectSocket(): Promise<Socket> {
   socket = io(SOCKET_URL, {
     auth: { token },
     transports: ['websocket', 'polling'],
+    reconnection: true,
+    reconnectionAttempts: Infinity,
+    reconnectionDelay: 1000,
+    reconnectionDelayMax: 5000,
+    timeout: 10000,
   });
 
   return new Promise((resolve, reject) => {
