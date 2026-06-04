@@ -1,15 +1,25 @@
 # Migración de Infraestructura — Sistema de Subastas
 
-Roadmap de la migración del proyecto a infraestructura cloud (Azure) para un uso
-**temporal (~45 días)** de demo/entrega del TPO. Rama de trabajo: `Migracion-Infra`.
+Despliegue del proyecto (entrega 2 / rama `main`) en **Azure for Students** para
+un uso de demo/entrega del TPO. **Estado: desplegado y funcionando**, con CI/CD
+automático desde `main`.
+
+## URLs de producción
+
+| Servicio | URL |
+|----------|-----|
+| **Web** (Azure Static Web Apps) | **https://witty-ocean-0b3e6550f.7.azurestaticapps.net** |
+| **API** (backend en VM, HTTPS) | **https://subastas-api-fvasquez.canadacentral.cloudapp.azure.com/api** |
+| **Health check** | `…/api/health` → `{success:true, data:{db:"connected"}}` |
+| **Swagger** | `…/api/docs` |
 
 ---
 
 ## 1. Objetivo
 
-Mover la base de datos (y eventualmente el backend) de SQL Server local a Azure,
-aprovechando la cuenta **Azure for Students** (mail `@uade.edu.ar`, ~USD 100 de
-crédito), de forma que la app sea accesible sin depender del entorno local.
+Mover **base de datos + backend** de SQL Server local a Azure, aprovechando la
+cuenta **Azure for Students** (mail `@uade.edu.ar`, ~USD 100 de crédito), de forma
+que la app sea accesible (web y mobile) sin depender del entorno local.
 
 Restricción clave: el proyecto usa **SQL Server** (`mssql`/tedious), por lo que
 **Azure SQL Database** es el destino natural (lift & shift, sin reescribir queries).
@@ -20,10 +30,13 @@ Restricción clave: el proyecto usa **SQL Server** (`mssql`/tedious), por lo que
 
 | Tema | Decisión | Motivo |
 |------|----------|--------|
-| Base de datos | **Azure SQL Database (free offer)** | Serverless GP, gratis de por vida, $0, no toca el crédito |
-| Migrar a Postgres | ❌ Descartado | Uso temporal — no justifica reescribir los 7 controllers |
-| Backend (deploy) | ⏳ Pendiente de decidir | Opción A: VM con backend+DB en Docker · Opción B: VM backend + Azure SQL |
-| Región | **Canada Central** | Única región permitida por la policy que acepta servidores **y** soporta el free offer |
+| Base de datos | **Azure SQL Database (free offer)** | Serverless GP, $0, no toca el crédito |
+| Migrar a Postgres | ❌ Descartado | Uso temporal — no justifica reescribir los controllers |
+| Backend (deploy) | **Opción B: VM (Node+PM2) + Azure SQL** | La DB ya está en Azure SQL; la VM solo corre el backend |
+| Web | **Azure Static Web Apps (Free)** | Tier gratis, HTTPS + CDN, CI/CD nativo, no carga la VM |
+| Reverse proxy / TLS | **Caddy** | HTTPS automático (Let's Encrypt) sobre el dominio de la VM |
+| Región DB + VM | **Canada Central** | Permitida por la policy **y** soporta el free offer |
+| Región Web (SWA) | **East US 2** | Región de SWA permitida por la policy |
 
 > **Nota sobre regiones:** la suscripción de estudiante tiene una policy
 > *"Allowed resource deployment regions"* que permite solo:
@@ -37,17 +50,16 @@ Restricción clave: el proyecto usa **SQL Server** (`mssql`/tedious), por lo que
 |---------|-------|
 | Resource group | `rg-subastas` |
 | SQL Server | `subastas-uade-cac` → FQDN `subastas-uade-cac.database.windows.net` |
-| Base de datos | `subastas` (Serverless GP, `useFreeLimit=true`, `AutoPause`) |
-| Región | Canada Central |
-| Admin login | `subastasadmin` |
-| Password | **En `server/.env`** (gitignoreado — no se versiona) |
-| Connection policy | **Proxy** ✅ (aplicada) |
-| Firewall | `AllowAzureServices` (0.0.0.0) + `ClientIP-fvasquez` + `ClientIP-casa-fvasquez` + `VM-subastas-api` |
+| Base de datos | `subastas` (Serverless GP, `useFreeLimit=true`, `AutoPause`) — **30 tablas** |
+| Admin login | `subastasadmin` (password en `server/.env`, no se versiona) |
+| Connection policy | **Proxy** |
+| Firewall SQL | `AllowAzureServices` (0.0.0.0) + reglas `ClientIP-*` + `VM-subastas-api` |
 | **VM backend** | `subastas-api` → **`subastas-api-fvasquez.canadacentral.cloudapp.azure.com`** (IP `20.63.47.115`) |
-| VM specs | **Standard_B2pls_v2** — Ubuntu 22.04 LTS **ARM64 (aarch64)**, 2 vCPU, 4 GB RAM |
-| VM acceso | usuario `azureuser`, clave SSH `~/.ssh/subastas_vm` (privada, no se versiona); puertos 22/80/443 abiertos |
+| VM specs | **Standard_B2pls_v2** — Ubuntu 22.04 LTS **ARM64**, 2 vCPU, 4 GB RAM |
+| VM acceso | usuario `azureuser`, clave SSH `~/.ssh/subastas_vm`; puertos 22/80/443 |
+| **Static Web App** | `subastas-web` (Free, East US 2) → `witty-ocean-0b3e6550f.7.azurestaticapps.net` |
 
-> **Nota VM:** la suscripción de estudiante tiene **bloqueadas todas las B-series x86**
+> **Nota VM:** la suscripción tiene **bloqueadas las B-series x86**
 > (`NotAvailableForSubscription`) en las regiones permitidas → se usó **ARM64**
 > (Ampere `B2pls_v2`), que corre Node/PM2/Caddy sin problema.
 
@@ -55,44 +67,39 @@ Restricción clave: el proyecto usa **SQL Server** (`mssql`/tedious), por lo que
 
 ## 4. Estado del roadmap
 
-### Fase 0 — Setup de herramientas
-- [x] Instalar Azure CLI (`az`) vía winget
-- [x] `az login` (cuenta `fvasquez@uade.edu.ar`, MFA recuperado)
-- [x] Agregar `az` al PATH del sistema
+### Fase 0 — Setup de herramientas ✅
+- [x] Azure CLI (`az`) vía winget + `az login` (`fvasquez@uade.edu.ar`, MFA)
 
-### Fase 1 — Provisión de la base de datos
-- [x] Crear resource group `rg-subastas`
-- [x] Crear SQL Server `subastas-uade-cac` (Canada Central)
-- [x] Crear base `subastas` con **free offer** (serverless, auto-pause)
-- [x] Reglas de firewall (servicios Azure + IP del cliente)
-- [x] Eliminar servidor fantasma de Chile (`subastas-uade-2026`)
+### Fase 1 — Base de datos ✅
+- [x] Resource group `rg-subastas` + SQL Server `subastas-uade-cac` (Canada Central)
+- [x] Base `subastas` con **free offer** (serverless, auto-pause)
+- [x] Reglas de firewall (servicios Azure + IPs de cliente + IP de la VM)
 
-### Fase 2 — Carga del schema (sobre `main` / entrega 2)
-- [x] Crear `server/.env` apuntando a Azure
-- [x] `npm install` / `npm ci` en `server/`
-- [x] Usar el runner de `main`: **`server/run-migrations.js`** (tabla `schema_version`, idempotente, separadores `GO`, rollback `-- @DOWN`)
-- [x] **Recrear el schema desde cero** (DB vacía) → baseline + migraciones `004`–`014`
-- [x] Verificar tablas creadas ✅ (**30 tablas** + `schema_version` con las 12 entradas)
+### Fase 2 — Schema (desde `main` / entrega 2) ✅
+- [x] `server/.env` apuntando a Azure
+- [x] Runner de `main`: **`server/run-migrations.js`** (tabla `schema_version`, idempotente, `GO`, rollback `-- @DOWN`)
+- [x] **Schema recreado desde cero** → baseline + migraciones `004`–`014`
+- [x] **30 tablas** + `schema_version` con las 12 entradas
 
-> ⚠️ Las primeras corridas se hicieron sobre la rama vieja `Migracion-Infra` (23→28
-> tablas con un `run-azure-migration.js` ad-hoc). Al detectar que `main` (entrega 2)
-> era la app real, se **rehízo** todo sobre `main` (ver problema #11).
+### Fase 3 — Backend en VM ✅
+- [x] VM con Node 22 + PM2 (proceso `subastas-api`, auto-start tras reboot)
+- [x] Caddy reverse proxy con **HTTPS automático** (Let's Encrypt)
+- [x] Fix `connectionTimeout=60000` en `db.ts` (auto-pause del serverless)
+- [x] Fix `tsconfig` (`include: src` + `exclude: dist` — evitaba TS5055 en el CD)
+- [x] VM corriendo el código de `main`
+- [x] **Endpoints OK (HTTPS):** `/api/health` 200 · `/api/subastas` 200 · `/api/admin/clientes` 401 · `/api/docs` 200
+- [x] `CORS_ORIGINS` con la URL del web (verificado: `Access-Control-Allow-Origin` OK)
 
-### Fase 3 — Backend (desde `main`)
-- [x] Verificar conexión a Azure → `GET /api/health` = `{db: connected}` ✅
-- [x] **Deploy del backend — Opción B (VM + Azure SQL)** ✅
-  - [x] VM con Node 22 + PM2 (proceso `subastas-api`, auto-start tras reboot)
-  - [x] Caddy reverse proxy con **HTTPS automático** (Let's Encrypt)
-  - [x] Fix `connectionTimeout=60000` en `db.ts` (auto-pause del serverless)
-  - [x] Fix `tsconfig` (`include: src` — evitaba rebuild por TS5055)
-  - [x] VM corriendo el código de `main` (rama `infra/azure-deploy`) ✅
-  - [x] **Endpoints OK (HTTPS):** `/api/health` 200 · `/api/subastas` 200 · `/api/admin/clientes` 401 · `/api/docs` 200
-- [ ] Configurar `CORS_ORIGINS` (se completa en Fase E con la URL del web)
+### Fase 4 — Frontend ✅ (web) · ⏳ (mobile)
+- [x] **Wrapper de storage multiplataforma** `app/src/services/storage.ts` (SecureStore nativo / localStorage web)
+- [x] Web desplegada en Static Web Apps + `EXPO_PUBLIC_API_URL` al backend HTTPS
+- [x] Socket.IO deriva su URL quitando `/api` (sin cambios de código)
+- [ ] **Mobile** — `app/.env` (ya listo) + `eas build -p android` o Expo Go
 
-### Fase 4 — Frontend
-- [ ] Apuntar `app/.env` → `EXPO_PUBLIC_API_URL=https://subastas-api-fvasquez.canadacentral.cloudapp.azure.com/api`
-- [ ] Socket.IO ya deriva la URL quitando `/api` (no requiere cambio de código)
-- [ ] Web → Azure Static Web Apps · Mobile → EAS Build / Expo Go
+### Fase 5 — CI/CD ✅
+- [x] CI (build+jest backend, lint+typecheck frontend) en PRs y push a `main`
+- [x] CD backend (SSH a la VM) — verde en `main` (PR #2)
+- [x] CD web (export + Static Web Apps) — verde en `main` (PR #3)
 
 ---
 
@@ -102,61 +109,59 @@ Restricción clave: el proyecto usa **SQL Server** (`mssql`/tedious), por lo que
 |---|----------|----------|
 | 1 | MFA perdido (cambio de celular) | Recuperado / IT de UADE resetea MFA |
 | 2 | `RequestDisallowedByAzure` en Brazil South | Policy de regiones → usar región permitida |
-| 3 | `RegionDoesNotAllowProvisioning` (eastus2, southcentralus, northcentralus) | Sin capacidad → probar otras regiones |
-| 4 | Servidor fantasma reservando el nombre en eastus2 | Usar nombre nuevo por intento |
+| 3 | `RegionDoesNotAllowProvisioning` (varias regiones) | Sin capacidad → probar otras |
+| 4 | Servidor fantasma reservando el nombre | Usar nombre nuevo por intento |
 | 5 | `ProvisioningDisabled` free offer en Chile Central | El free offer no está en todas las regiones → Canada Central |
-| 6 | **`ECONNRESET` al conectar desde Node** | **Causa real: red de UADE (FortiGate) cortaba la salida al 1433.** Desde red doméstica conecta OK. La connection policy ya estaba en `Proxy`. |
-| 7 | `Login failed for user 'subastasadmin'` | `dotenv` cortaba la password en el `#` (la leía como comentario) → solo tomaba 4 chars. **Fix: encomillar el valor en `.env`** (`DB_PASSWORD="...#..."`). |
-| 8 | `Invalid object name 'productoArticulos'` en `GET /api/subastas` | Las tablas del feature de artículos múltiples se creaban de forma **perezosa** en `ventaController.ensureVentaSchema()`. En la rama vieja se parchó con una `005` ad-hoc; **en `main` ya está resuelto** por la migración `008_venta_schema.sql`. |
-| 9 | `ETIMEOUT: Failed to connect ... in 15000ms` en la VM | El serverless con **auto-pause** tarda ~30-60s en despertar; el `connectionTimeout` default (15s) no alcanza. **Fix: `connectionTimeout`/`requestTimeout`=60000 en `db.ts`** (configurable por env). |
-| 10 | `TS5055: Cannot write file dist/...d.ts` al recompilar | El `exclude` explícito del `tsconfig` anulaba el default y tsc tomaba los `.d.ts` de `dist/` como input en el 2º build (rompería el CD). **Fix: agregar `include: ["src/**/*"]` y `dist` al `exclude`.** |
-| 11 | **Se había deployado una versión vieja** | El trabajo de infra arrancó en `Migracion-Infra`, rama nacida de un commit **pre-entrega-2**. `main` (canónica, incluye `master`) tenía el panel admin + migraciones `004`–`014` sin aplicar. **Fix: rebasar la infra sobre `main`** (rama `infra/azure-deploy`, PR #2), recrear el schema y redeployar la VM contra `main`. Se descartó la `005` ad-hoc y el `run-azure-migration.js`. |
-
-> ✅ **Trabajo consolidado en `infra/azure-deploy`** (sale de `main`, solo suma) →
-> **PR #2** hacia `main`. Los commits viejos en `Migracion-Infra` quedan obsoletos.
-> El CD deploya desde `main` con `git reset --hard`, así la VM converge al mergear.
+| 6 | **`ECONNRESET` al conectar desde Node** | **Causa real: red de UADE (FortiGate) cortaba la salida al 1433.** Desde red doméstica conecta OK. |
+| 7 | `Login failed for user 'subastasadmin'` | `dotenv` cortaba la password en el `#` → solo tomaba 4 chars. **Fix: encomillar el valor en `.env`** (`DB_PASSWORD="...#..."`). |
+| 8 | `Invalid object name 'productoArticulos'` | Las tablas se creaban de forma perezosa en `ventaController`. **En `main` ya está resuelto** por la migración `008_venta_schema.sql`. |
+| 9 | `ETIMEOUT ... in 15000ms` en la VM | Auto-pause del serverless tarda ~30-60s en despertar. **Fix: `connectionTimeout`/`requestTimeout`=60000 en `db.ts`** (configurable por env). |
+| 10 | `TS5055: Cannot write file dist/...d.ts` | El `exclude` del `tsconfig` anulaba el default y tomaba `dist/*.d.ts` como input. **Fix: `include: ["src/**/*"]` + `dist` en `exclude`.** |
+| 11 | **Se había deployado una versión vieja** | El trabajo arrancó en `Migracion-Infra`, rama **pre-entrega-2**. `main` (incluye `master`) tenía el panel admin + migraciones `004`–`014`. **Fix: rebasar la infra sobre `main`** (`infra/azure-deploy`, PR #2), recrear el schema y redeployar. |
+| 12 | Auth no funcionaba en web (`expo-secure-store`) | `expo-secure-store` es solo nativo. **Fix: wrapper `storage.ts`** (SecureStore en nativo, `localStorage` en web) — PR #3. |
+| 13 | `MissingSubscriptionRegistration: Microsoft.Web` al crear la SWA | Resource provider no registrado. **Fix: `az provider register --namespace Microsoft.Web`** (una sola vez). |
+| 14 | Auto-shutdown nativo de la VM bloqueado | La policy de regiones rechaza el recurso `Microsoft.DevTestLab/schedules`. **Workaround: `az vm deallocate`/`start` manual** (ver §6). |
 
 ---
 
-## 6. Próximos pasos inmediatos
+## 6. Operación y próximos pasos
 
-1. ~~Schema en Azure~~ ✅ (30 tablas, desde `main`) · ~~Backend en VM por HTTPS~~ ✅ · ~~Rebase sobre main + PR #2~~ ✅ · ~~Secrets del CD~~ ✅
-2. **Mergear PR #2 → `main`** → dispara el CD (pasa la VM a `main` y redeploya) + el CI.
-3. **Fase E — Web** en Azure Static Web Apps + setear `CORS_ORIGINS` en la VM (ver §11).
-4. **Mobile** — copiar `app/.env.example` → `app/.env` + `eas build`.
+### Estado actual
+Backend + web **desplegados y con CI/CD activo**. Cada push a `main`:
+- toca `server/**` → redeploya el backend en la VM,
+- toca `app/**` → rebuildea y republica la web en Static Web Apps.
+
+### Pendiente (opcional)
+1. **Mobile** — copiar `app/.env.example` → `app/.env` + `eas build -p android` (o Expo Go).
+2. **Limpieza** — borrar la rama obsoleta `Migracion-Infra` (local + remoto).
 
 ### Datos de la VM (referencia rápida)
 - **SSH:** `ssh -i ~/.ssh/subastas_vm azureuser@20.63.47.115`
 - **App:** PM2 proceso `subastas-api` en `~/app-subastas/server` (`pm2 logs subastas-api`)
 - **Proxy:** Caddy, `/etc/caddy/Caddyfile` (HTTPS auto)
-- **API pública:** `https://subastas-api-fvasquez.canadacentral.cloudapp.azure.com/api`
 
 ### Encender / apagar la VM (ahorro de crédito)
-> El auto-shutdown **nativo** está bloqueado por la policy de regiones del subscription
-> (intenta crear `Microsoft.DevTestLab/schedules` y lo rechaza). Alternativa manual:
+> El auto-shutdown **nativo** está bloqueado por la policy de regiones (problema #14).
+> Alternativa manual:
 ```powershell
 az vm deallocate -g rg-subastas -n subastas-api   # apaga y deja de facturar cómputo
 az vm start      -g rg-subastas -n subastas-api   # enciende; Caddy + PM2 arrancan solos
 ```
 > La IP `20.63.47.115` y el dominio se mantienen (IP Standard estática).
-> Automatizable luego con un cron de GitHub Actions + service principal.
 
 ---
 
 ## 7. Cómo retomar en OTRA máquina (bootstrap)
 
-> El deploy vive en `main` (o `infra/azure-deploy` hasta mergear el PR #2). En la
-> máquina nueva, seguí estos pasos en orden. Ojo con dos cosas que **no** vienen
-> del repo: el `server/.env` (gitignoreado) y la **IP del firewall** (cada máquina
-> tiene IP pública distinta).
+> El deploy vive en `main`. Dos cosas **no** vienen del repo: el `server/.env`
+> (gitignoreado) y la **IP del firewall** (cada máquina tiene IP pública distinta).
 
 ```powershell
-# 1) Clonar y pararse en la rama de deploy
+# 1) Clonar
 git clone https://github.com/AlvaFG/app-subastas.git
-cd app-subastas
-git checkout main          # o infra/azure-deploy si el PR #2 sigue abierto
+cd app-subastas        # rama main
 
-# 2) Azure CLI (si no está) + login con tu cuenta personal/educativa
+# 2) Azure CLI (si no está) + login
 winget install -e --id Microsoft.AzureCLI --accept-package-agreements --accept-source-agreements
 #   reabrir la terminal, luego:
 az login                     # cuenta fvasquez@uade.edu.ar (MFA)
@@ -166,31 +171,31 @@ $ip = (Invoke-RestMethod https://api.ipify.org)
 az sql server firewall-rule create -g rg-subastas -s subastas-uade-cac `
   -n ClientIP-maquina2 --start-ip-address $ip --end-ip-address $ip
 
-# 4) Recrear server/.env (NO está en el repo). Usar la password que guardaste.
-#    Plantilla en el bloque de abajo (§9). DB_PASSWORD = la del admin subastasadmin.
+# 4) Recrear server/.env (NO está en el repo). Plantilla en §9.
 
 # 5) Dependencias del backend
 npm install --prefix server
 ```
 
-Una vez hecho lo anterior, para (re)crear el schema en Azure correr el runner de
-`main`: `node server/run-migrations.js` (idempotente, trackea en `schema_version`).
+Para (re)crear el schema en Azure: `node server/run-migrations.js`
+(idempotente, trackea en `schema_version`).
 
 ---
 
 ## 8. Comandos de referencia
 
 ```powershell
-# Ruta del CLI (si no está en PATH de la terminal actual)
-$az = "C:\Program Files\Microsoft SDKs\Azure\CLI2\wbin\az.cmd"
-
 # Estado de la base
-& $az sql db show -g rg-subastas -s subastas-uade-cac -n subastas `
+az sql db show -g rg-subastas -s subastas-uade-cac -n subastas `
   --query "{db:name, estado:status, freeOffer:useFreeLimit}" -o json
 
 # Actualizar la IP del cliente en el firewall (si cambia)
-& $az sql server firewall-rule create -g rg-subastas -s subastas-uade-cac `
+az sql server firewall-rule create -g rg-subastas -s subastas-uade-cac `
   -n ClientIP-fvasquez --start-ip-address <IP> --end-ip-address <IP>
+
+# Token de deploy de la Static Web App
+az staticwebapp secrets list -n subastas-web -g rg-subastas `
+  --query properties.apiKey -o tsv
 ```
 
 ---
@@ -198,12 +203,12 @@ $az = "C:\Program Files\Microsoft SDKs\Azure\CLI2\wbin\az.cmd"
 ## 9. Plantilla `server/.env`
 
 > Este archivo **no se versiona** (está en `.gitignore`). Recrealo en cada máquina.
-> `DB_PASSWORD` es la del admin `subastasadmin` que guardaste al crear el servidor.
+> `DB_PASSWORD` es la del admin `subastasadmin`. Si tiene `#`, **encomillarla**.
 
 ```env
 PORT=3000
 DB_USER=subastasadmin
-DB_PASSWORD=<la-password-del-admin-que-guardaste>
+DB_PASSWORD="<la-password-del-admin>"
 DB_SERVER=subastas-uade-cac.database.windows.net
 DB_NAME=subastas
 DB_PORT=1433
@@ -213,8 +218,8 @@ NODE_ENV=production
 JWT_SECRET=<string-largo-aleatorio>
 JWT_REFRESH_SECRET=<otro-string-largo-aleatorio-distinto>
 
-# Se completa con la URL del front web (Static Web Apps) para habilitar CORS
-CORS_ORIGINS=
+# URL del front web (Static Web Apps) para habilitar CORS
+CORS_ORIGINS=https://witty-ocean-0b3e6550f.7.azurestaticapps.net
 
 CLOUDINARY_CLOUD_NAME=
 CLOUDINARY_API_KEY=
@@ -225,32 +230,31 @@ CLOUDINARY_API_SECRET=
 
 ## 10. CI/CD (GitHub Actions)
 
-Stack elegido: backend en VM con **PM2 + git pull** · web en **Azure Static Web Apps** · **CI completo**.
-Los workflows están en la rama `infra/azure-deploy` (PR #2):
+Workflows en `main` (`.github/workflows/`):
 
 | Archivo | Qué hace | Dispara |
 |---------|----------|---------|
-| `.github/workflows/ci.yml` | Backend: `npm ci` → `tsc` → `jest` (DB mockeada). Frontend: `tsc --noEmit` + `expo lint`. | PRs y push a `main`/`master`/`Migracion-Infra` |
-| `.github/workflows/deploy-backend.yml` | SSH a la VM → `git reset --hard origin/main` → `npm ci` → `build` → `pm2 reload` → health check | Push a `main` que toque `server/**` (o manual) |
+| `ci.yml` | Backend: `npm ci` → `tsc` → `jest` (DB mockeada). Frontend: `tsc --noEmit` + `expo lint`. | PRs y push a `main`/`master` |
+| `deploy-backend.yml` | SSH a la VM → `git reset --hard origin/main` → `npm ci` → `build` → `pm2 reload` → health check | Push a `main` que toque `server/**` |
+| `deploy-web.yml` | `npm ci` → `expo export -p web` → deploy a Static Web Apps | Push a `main` que toque `app/**` |
 
-### Secrets del CD — ✅ ya cargados (`gh secret set`)
-> Acceso **Admin** al repo confirmado (ver *Settings → Secrets and variables*).
+### Secrets (✅ cargados en *Settings → Secrets and variables → Actions*)
 
-| Secret | Valor |
-|--------|-------|
-| `VM_HOST` | `20.63.47.115` |
-| `VM_USER` | `azureuser` |
-| `VM_SSH_KEY` | clave privada `~/.ssh/subastas_vm` (cargada como secret) |
+| Secret | Para qué |
+|--------|----------|
+| `VM_HOST` | IP de la VM (`20.63.47.115`) |
+| `VM_USER` | usuario SSH (`azureuser`) |
+| `VM_SSH_KEY` | clave privada `~/.ssh/subastas_vm` |
+| `AZURE_STATIC_WEB_APPS_API_TOKEN` | deployment token de la SWA |
 
-Opcional, en la pestaña **Variables**: `DEPLOY_BRANCH` (default `main`).
+> Flujo de iteración: rama → PR → CI valida → merge a `main` → se redeploya solo
+> lo que cambió (backend y/o web). PRs históricos: **#2** (infra/backend), **#3** (web).
 
-> ⚠️ **Coherencia de rama:** la VM tiene el repo en `~/app-subastas` en `infra/azure-deploy`.
-> El CD hace `git checkout main && git reset --hard origin/main`, así al **mergear el PR #2**
-> el primer deploy pasa la VM a `main` automáticamente.
-
-### Re-cargar el secret de la clave (si hiciera falta)
+### Re-cargar secrets (si hiciera falta)
 ```powershell
 gh secret set VM_SSH_KEY -R AlvaFG/app-subastas < "$env:USERPROFILE\.ssh\subastas_vm"
+az staticwebapp secrets list -n subastas-web -g rg-subastas --query properties.apiKey -o tsv |
+  gh secret set AZURE_STATIC_WEB_APPS_API_TOKEN -R AlvaFG/app-subastas
 ```
 
 ---
@@ -258,18 +262,16 @@ gh secret set VM_SSH_KEY -R AlvaFG/app-subastas < "$env:USERPROFILE\.ssh\subasta
 ## 11. Frontend (web + mobile)
 
 El backend en la VM es la **API común** para ambas plataformas. Solo cambia el empaquetado.
+El token JWT se guarda con el wrapper `app/src/services/storage.ts` (SecureStore en
+nativo, `localStorage` en web).
 
-### Web — Azure Static Web Apps (free)
-1. Portal Azure → crear **Static Web App** (Free) enlazada al repo `AlvaFG/app-subastas`
-   (genera su propio workflow de GitHub Actions).
-2. Build config: app location `app`, output `dist`, comando `npx expo export -p web`.
-3. Variable de entorno del build: `EXPO_PUBLIC_API_URL=https://subastas-api-fvasquez.canadacentral.cloudapp.azure.com/api`.
-4. Cuando se sepa la URL `*.azurestaticapps.net`, **agregarla a `CORS_ORIGINS`** en el
-   `server/.env` de la VM y `pm2 restart subastas-api`.
+### Web — Azure Static Web Apps ✅
+- Recurso `subastas-web` (Free, East US 2) → https://witty-ocean-0b3e6550f.7.azurestaticapps.net
+- Deploy automático vía `deploy-web.yml` (build `expo export -p web` + token de la SWA).
+- `CORS_ORIGINS` del backend incluye esa URL.
 
-### Mobile — EAS / Expo Go
+### Mobile — EAS / Expo Go ⏳
 ```powershell
 Copy-Item app/.env.example app/.env   # ya apunta al backend HTTPS de la VM
 # Expo Go: npm run start   |   APK: eas build -p android
 ```
-
