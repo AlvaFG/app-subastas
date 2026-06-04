@@ -13,6 +13,11 @@ const config: sql.config = {
     encrypt: process.env.DB_ENCRYPT !== 'false',
     trustServerCertificate: process.env.NODE_ENV !== 'production',
   },
+  // Azure SQL serverless con auto-pause: el arranque en frio puede tardar
+  // ~30-60s, mas que el connectionTimeout por defecto (15s). Se eleva para
+  // tolerar el resume sin fallar la primera request.
+  connectionTimeout: parseInt(process.env.DB_CONNECTION_TIMEOUT || '60000'),
+  requestTimeout: parseInt(process.env.DB_REQUEST_TIMEOUT || '60000'),
   pool: {
     max: 10,
     min: 0,
