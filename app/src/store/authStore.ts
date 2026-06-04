@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import * as SecureStore from 'expo-secure-store';
+import * as storage from '../services/storage';
 import api from '../services/api';
 
 interface User {
@@ -44,8 +44,8 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   login: async (email, clave) => {
     const { data } = await api.post('/auth/login', { email, clave });
-    await SecureStore.setItemAsync('accessToken', data.data.accessToken);
-    await SecureStore.setItemAsync('refreshToken', data.data.refreshToken);
+    await storage.setItemAsync('accessToken', data.data.accessToken);
+    await storage.setItemAsync('refreshToken', data.data.refreshToken);
     set({ user: data.data.user, isAuthenticated: true });
   },
 
@@ -60,7 +60,7 @@ export const useAuthStore = create<AuthState>((set) => ({
 
   loadUser: async () => {
     try {
-      const token = await SecureStore.getItemAsync('accessToken');
+      const token = await storage.getItemAsync('accessToken');
       if (!token) {
         set({ isLoading: false, isAuthenticated: false });
         return;
@@ -82,7 +82,7 @@ export const useAuthStore = create<AuthState>((set) => ({
   },
 
   logout: async () => {
-    const refreshToken = await SecureStore.getItemAsync('refreshToken');
+    const refreshToken = await storage.getItemAsync('refreshToken');
     if (refreshToken) {
       try {
         await api.post('/auth/logout', { refreshToken });
@@ -90,8 +90,8 @@ export const useAuthStore = create<AuthState>((set) => ({
         // Ignorar errores de red: igualmente limpiamos la sesion local
       }
     }
-    await SecureStore.deleteItemAsync('accessToken');
-    await SecureStore.deleteItemAsync('refreshToken');
+    await storage.deleteItemAsync('accessToken');
+    await storage.deleteItemAsync('refreshToken');
     set({ user: null, isAuthenticated: false });
   },
 }));
