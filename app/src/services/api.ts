@@ -1,5 +1,5 @@
 import axios from 'axios';
-import * as SecureStore from 'expo-secure-store';
+import * as storage from './storage';
 import { NativeModules, Platform } from 'react-native';
 import Constants from 'expo-constants';
 
@@ -51,7 +51,7 @@ const api = axios.create({ baseURL: API_URL, timeout: 15000 });
 
 // Interceptor: agregar token a cada request
 api.interceptors.request.use(async (config) => {
-  const token = await SecureStore.getItemAsync('accessToken');
+  const token = await storage.getItemAsync('accessToken');
   if (token) {
     config.headers.Authorization = `Bearer ${token}`;
   }
@@ -68,7 +68,7 @@ api.interceptors.response.use(
       originalRequest._retry = true;
 
       try {
-        const refreshToken = await SecureStore.getItemAsync('refreshToken');
+        const refreshToken = await storage.getItemAsync('refreshToken');
         if (!refreshToken) throw new Error('No refresh token');
 
         const { data } = await axios.post(`${API_URL}/auth/refresh`, { refreshToken });
@@ -77,16 +77,16 @@ api.interceptors.response.use(
         if (!newToken) throw new Error('Invalid refresh response');
 
         // El backend ROTA el refresh token: guardar ambos tokens nuevos.
-        await SecureStore.setItemAsync('accessToken', newToken);
+        await storage.setItemAsync('accessToken', newToken);
         if (newRefreshToken) {
-          await SecureStore.setItemAsync('refreshToken', newRefreshToken);
+          await storage.setItemAsync('refreshToken', newRefreshToken);
         }
         originalRequest.headers.Authorization = `Bearer ${newToken}`;
 
         return api(originalRequest);
       } catch {
-        await SecureStore.deleteItemAsync('accessToken');
-        await SecureStore.deleteItemAsync('refreshToken');
+        await storage.deleteItemAsync('accessToken');
+        await storage.deleteItemAsync('refreshToken');
         // El store detectara que no hay token y redirigira a login
       }
     }

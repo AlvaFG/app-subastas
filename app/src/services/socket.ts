@@ -1,5 +1,5 @@
 import { io, Socket } from 'socket.io-client';
-import * as SecureStore from 'expo-secure-store';
+import * as storage from './storage';
 import { API_URL } from './api';
 
 function resolveSocketUrl(): string {
@@ -14,7 +14,7 @@ let socket: Socket | null = null;
 export async function connectSocket(): Promise<Socket> {
   if (socket?.connected) return socket;
 
-  const token = await SecureStore.getItemAsync('accessToken');
+  const token = await storage.getItemAsync('accessToken');
 
   socket = io(SOCKET_URL, {
     auth: { token },

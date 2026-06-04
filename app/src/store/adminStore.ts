@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import * as SecureStore from 'expo-secure-store';
+import * as storage from '../services/storage';
 import adminApi, { ADMIN_TOKEN_KEY } from '../services/adminApi';
 
 interface AdminUser {
@@ -23,17 +23,17 @@ export const useAdminStore = create<AdminState>((set) => ({
 
   login: async (email, clave) => {
     const { data } = await adminApi.post('/auth/admin/login', { email, clave });
-    await SecureStore.setItemAsync(ADMIN_TOKEN_KEY, data.data.accessToken);
+    await storage.setItemAsync(ADMIN_TOKEN_KEY, data.data.accessToken);
     set({ admin: data.data.user, isAdminAuth: true });
   },
 
   logout: async () => {
-    await SecureStore.deleteItemAsync(ADMIN_TOKEN_KEY);
+    await storage.deleteItemAsync(ADMIN_TOKEN_KEY);
     set({ admin: null, isAdminAuth: false });
   },
 
   loadAdmin: async () => {
-    const token = await SecureStore.getItemAsync(ADMIN_TOKEN_KEY);
+    const token = await storage.getItemAsync(ADMIN_TOKEN_KEY);
     const authed = !!token;
     set({ isAdminAuth: authed });
     return authed;
