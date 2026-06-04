@@ -67,23 +67,26 @@ Restricción clave: el proyecto usa **SQL Server** (`mssql`/tedious), por lo que
 - [x] Reglas de firewall (servicios Azure + IP del cliente)
 - [x] Eliminar servidor fantasma de Chile (`subastas-uade-2026`)
 
-### Fase 2 — Carga del schema
+### Fase 2 — Carga del schema (sobre `main` / entrega 2)
 - [x] Crear `server/.env` apuntando a Azure
-- [x] `npm install` en `server/`
-- [x] Script `server/run-azure-migration.js` (maneja separadores `GO`, idempotente)
-- [x] **Ejecutar la carga del schema** ✅ (5 batches, 0 errores)
-- [x] Verificar tablas creadas ✅ (**23 tablas** iniciales en Azure SQL)
-- [x] Migración `005_venta_articulos_schema.sql` (tablas del feature de artículos múltiples) → **28 tablas** ✅
+- [x] `npm install` / `npm ci` en `server/`
+- [x] Usar el runner de `main`: **`server/run-migrations.js`** (tabla `schema_version`, idempotente, separadores `GO`, rollback `-- @DOWN`)
+- [x] **Recrear el schema desde cero** (DB vacía) → baseline + migraciones `004`–`014`
+- [x] Verificar tablas creadas ✅ (**30 tablas** + `schema_version` con las 12 entradas)
 
-### Fase 3 — Backend
-- [x] Verificar `npm run dev` conectando a Azure → `GET /api/health` = `{db: connected}` ✅
-- [x] Probar endpoint con datos reales → `GET /api/subastas` = HTTP 200 ✅
+> ⚠️ Las primeras corridas se hicieron sobre la rama vieja `Migracion-Infra` (23→28
+> tablas con un `run-azure-migration.js` ad-hoc). Al detectar que `main` (entrega 2)
+> era la app real, se **rehízo** todo sobre `main` (ver problema #11).
+
+### Fase 3 — Backend (desde `main`)
+- [x] Verificar conexión a Azure → `GET /api/health` = `{db: connected}` ✅
 - [x] **Deploy del backend — Opción B (VM + Azure SQL)** ✅
   - [x] VM con Node 22 + PM2 (proceso `subastas-api`, auto-start tras reboot)
   - [x] Caddy reverse proxy con **HTTPS automático** (Let's Encrypt)
   - [x] Fix `connectionTimeout=60000` en `db.ts` (auto-pause del serverless)
   - [x] Fix `tsconfig` (`include: src` — evitaba rebuild por TS5055)
-  - [x] **HTTPS público OK:** `https://subastas-api-fvasquez.canadacentral.cloudapp.azure.com/api/health`
+  - [x] VM corriendo el código de `main` (rama `infra/azure-deploy`) ✅
+  - [x] **Endpoints OK (HTTPS):** `/api/health` 200 · `/api/subastas` 200 · `/api/admin/clientes` 401 · `/api/docs` 200
 - [ ] Configurar `CORS_ORIGINS` (se completa en Fase E con la URL del web)
 
 ### Fase 4 — Frontend
@@ -104,23 +107,21 @@ Restricción clave: el proyecto usa **SQL Server** (`mssql`/tedious), por lo que
 | 5 | `ProvisioningDisabled` free offer en Chile Central | El free offer no está en todas las regiones → Canada Central |
 | 6 | **`ECONNRESET` al conectar desde Node** | **Causa real: red de UADE (FortiGate) cortaba la salida al 1433.** Desde red doméstica conecta OK. La connection policy ya estaba en `Proxy`. |
 | 7 | `Login failed for user 'subastasadmin'` | `dotenv` cortaba la password en el `#` (la leía como comentario) → solo tomaba 4 chars. **Fix: encomillar el valor en `.env`** (`DB_PASSWORD="...#..."`). |
-| 8 | `Invalid object name 'productoArticulos'` en `GET /api/subastas` | Las tablas del feature de artículos múltiples se creaban de forma **perezosa** en `ventaController.ensureVentaSchema()` (solo al pegarle a `/api/venta`). En DB nueva, `subastas` las consulta antes → 500. **Fix: migración formal `005_venta_articulos_schema.sql`** con ese DDL idempotente. |
+| 8 | `Invalid object name 'productoArticulos'` en `GET /api/subastas` | Las tablas del feature de artículos múltiples se creaban de forma **perezosa** en `ventaController.ensureVentaSchema()`. En la rama vieja se parchó con una `005` ad-hoc; **en `main` ya está resuelto** por la migración `008_venta_schema.sql`. |
 | 9 | `ETIMEOUT: Failed to connect ... in 15000ms` en la VM | El serverless con **auto-pause** tarda ~30-60s en despertar; el `connectionTimeout` default (15s) no alcanza. **Fix: `connectionTimeout`/`requestTimeout`=60000 en `db.ts`** (configurable por env). |
 | 10 | `TS5055: Cannot write file dist/...d.ts` al recompilar | El `exclude` explícito del `tsconfig` anulaba el default y tsc tomaba los `.d.ts` de `dist/` como input en el 2º build (rompería el CD). **Fix: agregar `include: ["src/**/*"]` y `dist` al `exclude`.** |
+| 11 | **Se había deployado una versión vieja** | El trabajo de infra arrancó en `Migracion-Infra`, rama nacida de un commit **pre-entrega-2**. `main` (canónica, incluye `master`) tenía el panel admin + migraciones `004`–`014` sin aplicar. **Fix: rebasar la infra sobre `main`** (rama `infra/azure-deploy`, PR #2), recrear el schema y redeployar la VM contra `main`. Se descartó la `005` ad-hoc y el `run-azure-migration.js`. |
 
-> ✅ **Fixes ya commiteados** en `Migracion-Infra` (sin push todavía):
-> `d0b980c` fixes de deploy · `340e233` doc · `659c5f2` workflows CI/CD.
-> El CD usa `git reset --hard`, así la versión commiteada converge con lo aplicado
-> a mano en la VM.
+> ✅ **Trabajo consolidado en `infra/azure-deploy`** (sale de `main`, solo suma) →
+> **PR #2** hacia `main`. Los commits viejos en `Migracion-Infra` quedan obsoletos.
+> El CD deploya desde `main` con `git reset --hard`, así la VM converge al mergear.
 
 ---
 
 ## 6. Próximos pasos inmediatos
 
-1. ~~Forzar connection policy a Proxy~~ ✅ · ~~Cargar schema~~ ✅ (28 tablas) · ~~Backend en VM por HTTPS~~ ✅ · ~~Commitear fixes~~ ✅
-2. **Fase C/D — Activar CI/CD** → push de la rama + cargar 3 secrets (ver §10).
-   - ✅ **Acceso confirmado:** poder ver *Settings → Secrets and variables* en GitHub
-     implica permiso **Admin** sobre el repo (no hace falta pedírselo a Alva).
+1. ~~Schema en Azure~~ ✅ (30 tablas, desde `main`) · ~~Backend en VM por HTTPS~~ ✅ · ~~Rebase sobre main + PR #2~~ ✅ · ~~Secrets del CD~~ ✅
+2. **Mergear PR #2 → `main`** → dispara el CD (pasa la VM a `main` y redeploya) + el CI.
 3. **Fase E — Web** en Azure Static Web Apps + setear `CORS_ORIGINS` en la VM (ver §11).
 4. **Mobile** — copiar `app/.env.example` → `app/.env` + `eas build`.
 
@@ -144,15 +145,16 @@ az vm start      -g rg-subastas -n subastas-api   # enciende; Caddy + PM2 arranc
 
 ## 7. Cómo retomar en OTRA máquina (bootstrap)
 
-> La rama `Migracion-Infra` ya está en GitHub. En la máquina nueva, seguí estos
-> pasos en orden. Ojo con dos cosas que **no** vienen del repo: el `server/.env`
-> (gitignoreado) y la **IP del firewall** (cada máquina tiene IP pública distinta).
+> El deploy vive en `main` (o `infra/azure-deploy` hasta mergear el PR #2). En la
+> máquina nueva, seguí estos pasos en orden. Ojo con dos cosas que **no** vienen
+> del repo: el `server/.env` (gitignoreado) y la **IP del firewall** (cada máquina
+> tiene IP pública distinta).
 
 ```powershell
-# 1) Clonar y pararse en la rama
+# 1) Clonar y pararse en la rama de deploy
 git clone https://github.com/AlvaFG/app-subastas.git
 cd app-subastas
-git checkout Migracion-Infra
+git checkout main          # o infra/azure-deploy si el PR #2 sigue abierto
 
 # 2) Azure CLI (si no está) + login con tu cuenta personal/educativa
 winget install -e --id Microsoft.AzureCLI --accept-package-agreements --accept-source-agreements
@@ -171,8 +173,8 @@ az sql server firewall-rule create -g rg-subastas -s subastas-uade-cac `
 npm install --prefix server
 ```
 
-Una vez hecho lo anterior, continuar con los **pendientes** (§6): aplicar Proxy y
-correr `node server/run-azure-migration.js`.
+Una vez hecho lo anterior, para (re)crear el schema en Azure correr el runner de
+`main`: `node server/run-migrations.js` (idempotente, trackea en `schema_version`).
 
 ---
 
@@ -224,33 +226,31 @@ CLOUDINARY_API_SECRET=
 ## 10. CI/CD (GitHub Actions)
 
 Stack elegido: backend en VM con **PM2 + git pull** · web en **Azure Static Web Apps** · **CI completo**.
-Los workflows ya están en el repo (rama `Migracion-Infra`, commit `659c5f2`):
+Los workflows están en la rama `infra/azure-deploy` (PR #2):
 
 | Archivo | Qué hace | Dispara |
 |---------|----------|---------|
 | `.github/workflows/ci.yml` | Backend: `npm ci` → `tsc` → `jest` (DB mockeada). Frontend: `tsc --noEmit` + `expo lint`. | PRs y push a `main`/`master`/`Migracion-Infra` |
-| `.github/workflows/deploy-backend.yml` | SSH a la VM → `git reset --hard` → `npm ci` → `build` → `pm2 reload` → health check | Push a `main` que toque `server/**` (o manual) |
+| `.github/workflows/deploy-backend.yml` | SSH a la VM → `git reset --hard origin/main` → `npm ci` → `build` → `pm2 reload` → health check | Push a `main` que toque `server/**` (o manual) |
 
-### Activar el CD — secrets a cargar
-> **Acceso:** ver *Settings → Secrets and variables* requiere rol **Admin** en el repo
-> (ya confirmado). En *Settings → Secrets and variables → Actions → **Secrets***:
+### Secrets del CD — ✅ ya cargados (`gh secret set`)
+> Acceso **Admin** al repo confirmado (ver *Settings → Secrets and variables*).
 
 | Secret | Valor |
 |--------|-------|
 | `VM_HOST` | `20.63.47.115` |
 | `VM_USER` | `azureuser` |
-| `VM_SSH_KEY` | **contenido completo** de la clave privada `~/.ssh/subastas_vm` (incluyendo `-----BEGIN/END-----`) |
+| `VM_SSH_KEY` | clave privada `~/.ssh/subastas_vm` (cargada como secret) |
 
 Opcional, en la pestaña **Variables**: `DEPLOY_BRANCH` (default `main`).
 
-> ⚠️ **Coherencia de rama:** la VM tiene el repo clonado en `~/app-subastas` en la rama
-> `Migracion-Infra`. El CD hace `git reset --hard origin/$DEPLOY_BRANCH`. Antes de activar,
-> definir la rama de deploy y asegurarse de que **contiene los fixes** (`d0b980c`).
-> Si el deploy va a `main`, primero mergear `Migracion-Infra` → `main`.
+> ⚠️ **Coherencia de rama:** la VM tiene el repo en `~/app-subastas` en `infra/azure-deploy`.
+> El CD hace `git checkout main && git reset --hard origin/main`, así al **mergear el PR #2**
+> el primer deploy pasa la VM a `main` automáticamente.
 
-### Obtener la clave privada para el secret (en la máquina local)
+### Re-cargar el secret de la clave (si hiciera falta)
 ```powershell
-Get-Content "$env:USERPROFILE\.ssh\subastas_vm"   # copiar TODO el output al secret VM_SSH_KEY
+gh secret set VM_SSH_KEY -R AlvaFG/app-subastas < "$env:USERPROFILE\.ssh\subastas_vm"
 ```
 
 ---
