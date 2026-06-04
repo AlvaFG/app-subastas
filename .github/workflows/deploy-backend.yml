@@ -1,0 +1,52 @@
+name: Deploy Backend (VM)
+
+# CD del backend: al pushear a la rama de deploy tocando server/,
+# se conecta por SSH a la VM, actualiza el codigo y recarga PM2.
+#
+# REQUISITOS (configurar en Settings > Secrets and variables > Actions):
+#   Secrets:
+#     VM_HOST     -> IP publica de la VM (ej. 20.63.47.115)
+#     VM_USER     -> usuario SSH (ej. azureuser)
+#     VM_SSH_KEY  -> contenido de la clave privada ~/.ssh/subastas_vm
+#   Variable (opcional):
+#     DEPLOY_BRANCH -> rama que corre la VM (default: main)
+#
+# NOTA: la VM debe tener clonado el repo en ~/app-subastas en la misma
+#       rama que DEPLOY_BRANCH. server/.env NO se versiona (vive en la VM).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'server/**'
+      - '.github/workflows/deploy-backend.yml'
+  workflow_dispatch: {}
+
+concurrency:
+  group: deploy-backend
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USER }}
+          key: ${{ secrets.VM_SSH_KEY }}
+          script: |
+            set -e
+            BRANCH="${{ vars.DEPLOY_BRANCH || 'main' }}"
+            cd ~/app-subastas
+            git fetch origin "$BRANCH"
+            git checkout "$BRANCH"
+            git reset --hard "origin/$BRANCH"
+            cd server
+            npm ci --no-audit --no-fund
+            npm run build
+            pm2 reload subastas-api --update-env
+            pm2 save
+            sleep 4
+            curl -fsS http://localhost:3000/api/health
