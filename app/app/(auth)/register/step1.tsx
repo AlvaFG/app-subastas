@@ -5,7 +5,15 @@ import * as ImagePicker from 'expo-image-picker';
 import { Button, Input } from '../../../src/components';
 import { colors, fonts, fontSizes, spacing } from '../../../src/theme';
 import { useAuthStore } from '../../../src/store/authStore';
-import { isValidEmail } from '../../../src/utils/validators';
+import {
+  isValidEmail,
+  onlyDigits,
+  onlyNameChars,
+  isValidDocumento,
+  isValidName,
+  DOCUMENTO_MIN_LENGTH,
+  DOCUMENTO_MAX_LENGTH,
+} from '../../../src/utils/validators';
 import countries from '../../../src/utils/countries';
 
 export default function RegisterStep1Screen() {
@@ -42,19 +50,27 @@ export default function RegisterStep1Screen() {
       setError('Complete todos los campos obligatorios');
       return;
     }
+    if (!isValidName(nombre) || !isValidName(apellido)) {
+      setError('Nombre y apellido deben tener al menos 2 letras');
+      return;
+    }
+    if (!isValidDocumento(documento)) {
+      setError(`El documento debe tener entre ${DOCUMENTO_MIN_LENGTH} y ${DOCUMENTO_MAX_LENGTH} numeros`);
+      return;
+    }
     if (!isValidEmail(email)) {
-      setError('Ingrese un email valido');
+      setError('Ingrese un email valido (debe incluir @)');
       return;
     }
     setLoading(true);
     try {
       await registerStep1({
         documento,
-        nombre,
-        apellido,
-        direccion,
+        nombre: nombre.trim(),
+        apellido: apellido.trim(),
+        direccion: direccion.trim(),
         numeroPais: parseInt(numeroPais, 10),
-        email,
+        email: email.trim(),
         fotoFrente,
         fotoDorso,
       });
@@ -86,10 +102,10 @@ export default function RegisterStep1Screen() {
       <Text style={styles.title}>Registro - Etapa 1</Text>
       <Text style={styles.subtitle}>Datos personales</Text>
 
-      <Input label="Nombre" leftIcon="person-outline" placeholder="Juan" value={nombre} onChangeText={setNombre} />
-      <Input label="Apellido" leftIcon="person-outline" placeholder="Perez" value={apellido} onChangeText={setApellido} />
+      <Input label="Nombre" leftIcon="person-outline" placeholder="Juan" value={nombre} onChangeText={(t) => setNombre(onlyNameChars(t))} maxLength={50} autoCapitalize="words" />
+      <Input label="Apellido" leftIcon="person-outline" placeholder="Perez" value={apellido} onChangeText={(t) => setApellido(onlyNameChars(t))} maxLength={50} autoCapitalize="words" />
 
-      <Input label="Documento" leftIcon="card-outline" placeholder="12345678" value={documento} onChangeText={setDocumento} keyboardType="numeric" />
+      <Input label="Documento" leftIcon="card-outline" placeholder="12345678" value={documento} onChangeText={(t) => setDocumento(onlyDigits(t))} keyboardType="number-pad" maxLength={DOCUMENTO_MAX_LENGTH} />
 
       <Input label="Email" leftIcon="mail-outline" placeholder="tu@email.com" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
 

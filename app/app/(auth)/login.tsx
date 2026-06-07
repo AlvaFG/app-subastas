@@ -21,12 +21,12 @@ export default function LoginScreen() {
       return;
     }
     if (!isValidEmail(email)) {
-      setError('Ingrese un email valido');
+      setError('Ingrese un email valido (debe incluir @)');
       return;
     }
     setLoading(true);
     try {
-      await login(email, clave);
+      await login(email.trim(), clave);
       router.replace('/(tabs)');
     } catch (err) {
       setError(getApiErrorMessage(err, 'Error al iniciar sesion'));
