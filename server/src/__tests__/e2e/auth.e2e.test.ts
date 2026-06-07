@@ -17,6 +17,12 @@ jest.mock('../../socket/auctionHandler', () => ({
   setupAuctionSocket: jest.fn(),
 }));
 
+// Mock the email service so forgot-password never touches SMTP.
+const mockSendPasswordResetEmail = jest.fn().mockResolvedValue(true);
+jest.mock('../../services/email', () => ({
+  sendPasswordResetEmail: (...args: unknown[]) => mockSendPasswordResetEmail(...args),
+}));
+
 // Set env vars before importing app
 process.env.JWT_SECRET = 'test-secret';
 process.env.JWT_REFRESH_SECRET = 'test-refresh-secret';
@@ -28,6 +34,7 @@ function resetMocks() {
   mockInput.mockReset().mockReturnThis();
   mockRequest.mockClear();
   mockRequest.mockImplementation(() => ({ input: mockInput, query: mockQuery }));
+  mockSendPasswordResetEmail.mockClear();
 }
 
 function generateToken(payload: object, secret = process.env.JWT_SECRET!) {
@@ -337,6 +344,122 @@ describe('Auth E2E', () => {
 
       expect(res.status).toBe(404);
       expect(res.body.error).toContain('no encontrado');
+    });
+  });
+
+  // ─── POST /api/auth/forgot-password ───
+
+  describe('POST /api/auth/forgot-password', () => {
+    it('should return 200 and generic message when the email exists', async () => {
+      // 1) lookup cliente → found, registro completo, activo
+      mockQuery.mockResolvedValueOnce({
+        recordset: [{
+          identificador: 42, email: 'juan@test.com', claveHash: 'hash',
+          nombre: 'Juan', estado: 'activo',
+        }],
+      });
+      // 2) UPDATE clientes con el token de reseteo
+      mockQuery.mockResolvedValueOnce({ recordset: [] });
+
+      const res = await request(app)
+        .post('/api/auth/forgot-password')
+        .send({ email: 'juan@test.com' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.mensaje).toContain('Si el email');
+      expect(mockSendPasswordResetEmail).toHaveBeenCalledTimes(1);
+    });
+
+    it('should return 200 generic message WITHOUT sending mail when email does not exist', async () => {
+      mockQuery.mockResolvedValueOnce({ recordset: [] });
+
+      const res = await request(app)
+        .post('/api/auth/forgot-password')
+        .send({ email: 'nadie@test.com' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.mensaje).toContain('Si el email');
+      // Anti-enumeracion: misma respuesta, pero no se genera token ni se envia mail.
+      expect(mockSendPasswordResetEmail).not.toHaveBeenCalled();
+    });
+
+    it('should NOT send mail when the account has no password yet (registro incompleto)', async () => {
+      mockQuery.mockResolvedValueOnce({
+        recordset: [{
+          identificador: 42, email: 'juan@test.com', claveHash: null,
+          nombre: 'Juan', estado: 'activo',
+        }],
+      });
+
+      const res = await request(app)
+        .post('/api/auth/forgot-password')
+        .send({ email: 'juan@test.com' });
+
+      expect(res.status).toBe(200);
+      expect(mockSendPasswordResetEmail).not.toHaveBeenCalled();
+    });
+
+    it('should return 400 when email is invalid', async () => {
+      const res = await request(app)
+        .post('/api/auth/forgot-password')
+        .send({ email: 'not-an-email' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
+    });
+  });
+
+  // ─── POST /api/auth/reset-password ───
+
+  describe('POST /api/auth/reset-password', () => {
+    const validBody = { token: 'a'.repeat(64), clave: 'NuevaClave123' };
+
+    it('should reset the password with a valid token', async () => {
+      // 1) lookup por hash de token (no vencido) → encontrado
+      mockQuery.mockResolvedValueOnce({ recordset: [{ identificador: 42 }] });
+      // 2) UPDATE clientes (nueva clave, limpia token y lock)
+      mockQuery.mockResolvedValueOnce({ recordset: [] });
+      // 3) UPDATE sesiones (revoca sesiones activas)
+      mockQuery.mockResolvedValueOnce({ recordset: [] });
+
+      const res = await request(app)
+        .post('/api/auth/reset-password')
+        .send(validBody);
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data.mensaje).toContain('Clave actualizada');
+    });
+
+    it('should return 400 when the token is invalid or expired', async () => {
+      mockQuery.mockResolvedValueOnce({ recordset: [] });
+
+      const res = await request(app)
+        .post('/api/auth/reset-password')
+        .send(validBody);
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('invalido o expirado');
+    });
+
+    it('should return 400 when the new clave is too weak', async () => {
+      const res = await request(app)
+        .post('/api/auth/reset-password')
+        .send({ token: 'a'.repeat(64), clave: 'weak' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
+    });
+
+    it('should return 400 when token is missing', async () => {
+      const res = await request(app)
+        .post('/api/auth/reset-password')
+        .send({ clave: 'NuevaClave123' });
+
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
     });
   });
 

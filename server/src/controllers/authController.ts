@@ -1,11 +1,13 @@
 import { Request, Response } from 'express';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import sql from 'mssql';
 import { connectDB } from '../models/db';
 import { AuthRequest } from '../middleware/auth';
-import { getJwtSecret, getJwtRefreshSecret } from '../config/env';
+import { getJwtSecret, getJwtRefreshSecret, getWebUrl } from '../config/env';
 import { uploadImage, toBuffer } from '../services/cloudinary';
+import { sendPasswordResetEmail } from '../services/email';
 
 const ACCESS_TTL = '1h';
 const REFRESH_TTL = '7d';
@@ -339,6 +341,116 @@ export async function login(req: Request, res: Response): Promise<void> {
     });
   } catch (error) {
     console.error('Error en login:', error);
+    res.status(500).json({ success: false, error: 'Error interno del servidor' });
+  }
+}
+
+// Recupero de clave: ventana de validez del token de reseteo.
+const RESET_TOKEN_TTL_MINUTES = 30;
+
+const sha256 = (value: string): string =>
+  crypto.createHash('sha256').update(value).digest('hex');
+
+// Respuesta generica del forgot-password: nunca revela si el email existe
+// (anti-enumeracion, igual criterio que el login).
+const FORGOT_GENERIC_MSG =
+  'Si el email esta registrado, te enviamos un enlace para restablecer la clave.';
+
+// POST /auth/forgot-password — inicia el recupero de clave.
+// Siempre responde 200 con un mensaje generico. Si el cliente existe y completo
+// su registro, genera un token de un solo uso (guardado hasheado) y manda el mail.
+export async function forgotPassword(req: Request, res: Response): Promise<void> {
+  try {
+    const { email } = req.body;
+    const pool = await connectDB();
+
+    const result = await pool.request()
+      .input('email', email)
+      .query(`
+        SELECT c.identificador, c.email, c.claveHash, p.nombre, p.estado
+        FROM clientes c
+        INNER JOIN personas p ON p.identificador = c.identificador
+        WHERE c.email = @email
+      `);
+
+    const user = result.recordset[0];
+
+    // Solo emitimos token a cuentas activas que ya tienen clave (registro completo).
+    // En cualquier otro caso respondemos el mismo mensaje sin hacer nada.
+    if (user && user.claveHash && user.estado !== 'inactivo') {
+      const rawToken = crypto.randomBytes(32).toString('hex');
+      const tokenHash = sha256(rawToken);
+      const expira = new Date(Date.now() + RESET_TOKEN_TTL_MINUTES * 60 * 1000);
+
+      await pool.request()
+        .input('id', user.identificador)
+        .input('hash', tokenHash)
+        .input('expira', sql.DateTime, expira)
+        .query(`
+          UPDATE clientes
+          SET resetTokenHash = @hash, resetTokenExpira = @expira
+          WHERE identificador = @id
+        `);
+
+      const resetUrl = `${getWebUrl()}/reset-password?token=${rawToken}`;
+      // Best-effort: un fallo de envio no debe cambiar la respuesta ni filtrar info.
+      await sendPasswordResetEmail(user.email, resetUrl, user.nombre);
+    }
+
+    res.json({ success: true, data: { mensaje: FORGOT_GENERIC_MSG } });
+  } catch (error) {
+    console.error('Error en forgotPassword:', error);
+    res.status(500).json({ success: false, error: 'Error interno del servidor' });
+  }
+}
+
+// POST /auth/reset-password — completa el recupero con el token del mail.
+// Valida el token (hash + vencimiento), setea la nueva clave, limpia el lock por
+// intentos fallidos y revoca todas las sesiones activas del cliente (BSEC-04).
+export async function resetPassword(req: Request, res: Response): Promise<void> {
+  try {
+    const { token, clave } = req.body;
+    const pool = await connectDB();
+
+    const tokenHash = sha256(token);
+    const result = await pool.request()
+      .input('hash', tokenHash)
+      .query(`
+        SELECT identificador
+        FROM clientes
+        WHERE resetTokenHash = @hash AND resetTokenExpira > GETDATE()
+      `);
+
+    if (result.recordset.length === 0) {
+      res.status(400).json({ success: false, error: 'Token invalido o expirado' });
+      return;
+    }
+
+    const clienteId = result.recordset[0].identificador;
+    const claveHash = await bcrypt.hash(clave, 10);
+
+    // Setear clave, invalidar el token (un solo uso) y resetear el lock.
+    await pool.request()
+      .input('id', clienteId)
+      .input('claveHash', claveHash)
+      .query(`
+        UPDATE clientes
+        SET claveHash = @claveHash,
+            resetTokenHash = NULL,
+            resetTokenExpira = NULL,
+            failedAttempts = 0,
+            lockUntil = NULL
+        WHERE identificador = @id
+      `);
+
+    // Revocar sesiones abiertas: un reseteo cierra sesion en todos los dispositivos.
+    await pool.request()
+      .input('cliente', clienteId)
+      .query("UPDATE sesiones SET activo = 'no' WHERE cliente = @cliente AND activo = 'si'");
+
+    res.json({ success: true, data: { mensaje: 'Clave actualizada. Ya podes iniciar sesion.' } });
+  } catch (error) {
+    console.error('Error en resetPassword:', error);
     res.status(500).json({ success: false, error: 'Error interno del servidor' });
   }
 }
