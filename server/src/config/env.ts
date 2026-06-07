@@ -48,3 +48,21 @@ export function isCloudinaryConfigured(): boolean {
       process.env.CLOUDINARY_API_SECRET
   );
 }
+
+export function isSmtpConfigured(): boolean {
+  return Boolean(
+    process.env.SMTP_HOST &&
+      process.env.SMTP_USER &&
+      process.env.SMTP_PASS
+  );
+}
+
+/**
+ * Public base URL of the web app, used to build the password-reset link.
+ * Falls back to the first CORS origin, then to a localhost dev default.
+ */
+export function getWebUrl(): string {
+  if (process.env.WEB_URL) return process.env.WEB_URL.replace(/\/$/, '');
+  const firstOrigin = process.env.CORS_ORIGINS?.split(',')[0]?.trim();
+  return (firstOrigin || 'http://localhost:8081').replace(/\/$/, '');
+}

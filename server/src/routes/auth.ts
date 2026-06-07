@@ -1,6 +1,6 @@
 import { Router } from 'express';
 import { body } from 'express-validator';
-import { registerStep1, registerStep2, login, adminLogin, refreshToken, logout, getMe } from '../controllers/authController';
+import { registerStep1, registerStep2, login, adminLogin, refreshToken, logout, getMe, forgotPassword, resetPassword } from '../controllers/authController';
 import { authGuard } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 
@@ -44,6 +44,23 @@ router.post('/admin/login',
   body('clave').notEmpty().withMessage('Clave requerida'),
   validate,
   adminLogin,
+);
+
+// Recupero de clave — Etapa 1: pedir el enlace por email
+router.post('/forgot-password',
+  body('email').isEmail().withMessage('Email invalido'),
+  validate,
+  forgotPassword,
+);
+
+// Recupero de clave — Etapa 2: setear la nueva clave con el token del mail
+router.post('/reset-password',
+  body('token').notEmpty().withMessage('Token requerido'),
+  body('clave').isLength({ min: 8 }).withMessage('La clave debe tener al menos 8 caracteres')
+    .matches(/[A-Z]/).withMessage('La clave debe contener al menos una mayuscula')
+    .matches(/[0-9]/).withMessage('La clave debe contener al menos un numero'),
+  validate,
+  resetPassword,
 );
 
 // Refresh token
