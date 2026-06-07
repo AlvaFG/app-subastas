@@ -31,3 +31,33 @@ export function validatePassword(clave: string): string | null {
   }
   return null;
 }
+
+// ─── Sanitizadores de input (filtrado en vivo, en onChangeText) ───
+
+/** Deja solo digitos. Para documento, telefono, etc. */
+export function onlyDigits(value: string): string {
+  return value.replace(/\D/g, '');
+}
+
+/**
+ * Deja solo caracteres validos de un nombre: letras (incluye acentos y ñ),
+ * espacios, guion y apostrofe. Filtra numeros y simbolos raros.
+ */
+export function onlyNameChars(value: string): string {
+  return value.replace(/[^a-zA-ZÀ-ÿñÑ\s'-]/g, '');
+}
+
+// ─── Validadores de formato (al enviar) ───
+
+export const DOCUMENTO_MIN_LENGTH = 6;
+export const DOCUMENTO_MAX_LENGTH = 9;
+
+/** Documento: solo numeros, entre 6 y 9 digitos (DNI). */
+export function isValidDocumento(documento: string): boolean {
+  return new RegExp(`^\\d{${DOCUMENTO_MIN_LENGTH},${DOCUMENTO_MAX_LENGTH}}$`).test(documento.trim());
+}
+
+/** Nombre/apellido: al menos 2 letras (ademas del filtro en vivo). */
+export function isValidName(value: string): boolean {
+  return /[a-zA-ZÀ-ÿñÑ]{2,}/.test(value.trim());
+}
