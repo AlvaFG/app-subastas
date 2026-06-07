@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, Switch, Alert, FlatList, TouchableOpacity, Image,
+  View, Text, StyleSheet, ScrollView, Switch, FlatList, TouchableOpacity, Image,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { Button, Input, Badge, Modal } from '../../src/components';
@@ -8,6 +8,7 @@ import { colors, fonts, fontSizes, spacing, radius, shadows } from '../../src/th
 import api from '../../src/services/api';
 import { useAuthStore } from '../../src/store/authStore';
 import { getApiErrorMessage } from '../../src/utils/apiError';
+import { notify, confirmAction } from '../../src/utils/notify';
 import type { MedioPago } from '../../src/types';
 import { router } from 'expo-router';
 
@@ -149,15 +150,15 @@ export default function VenderScreen() {
   }).format(value);
 
   const handleSubmit = async () => {
-    if (!descripcion) { Alert.alert('Error', 'Ingrese una descripcion del bien'); return; }
-    if (articulos.length === 0) { Alert.alert('Error', 'Agregue al menos un articulo'); return; }
-    if (articulos.some((articulo) => !articulo.descripcion.trim())) { Alert.alert('Error', 'Cada articulo debe tener descripcion'); return; }
-    if (articulos.some((articulo) => articulo.fotos.length === 0)) { Alert.alert('Error', 'Cada articulo debe tener al menos una foto'); return; }
+    if (!descripcion) { notify('Error', 'Ingrese una descripcion del bien'); return; }
+    if (articulos.length === 0) { notify('Error', 'Agregue al menos un articulo'); return; }
+    if (articulos.some((articulo) => !articulo.descripcion.trim())) { notify('Error', 'Cada articulo debe tener descripcion'); return; }
+    if (articulos.some((articulo) => articulo.fotos.length === 0)) { notify('Error', 'Cada articulo debe tener al menos una foto'); return; }
     const totalFotos = articulos.reduce((acumulado, articulo) => acumulado + articulo.fotos.length, 0);
-    if (totalFotos < 6) { Alert.alert('Error', `Debe subir al menos 6 fotos en total (tiene ${totalFotos})`); return; }
-    if (!precioBase) { Alert.alert('Error', 'Ingrese un precio base sugerido'); return; }
-    if (esObraDisenador && !nombreArtistaDisenador.trim()) { Alert.alert('Error', 'Ingrese nombre de artista/diseniador'); return; }
-    if (!declaracion) { Alert.alert('Error', 'Debe declarar que el bien le pertenece'); return; }
+    if (totalFotos < 6) { notify('Error', `Debe subir al menos 6 fotos en total (tiene ${totalFotos})`); return; }
+    if (!precioBase) { notify('Error', 'Ingrese un precio base sugerido'); return; }
+    if (esObraDisenador && !nombreArtistaDisenador.trim()) { notify('Error', 'Ingrese nombre de artista/diseniador'); return; }
+    if (!declaracion) { notify('Error', 'Debe declarar que el bien le pertenece'); return; }
 
     setLoading(true);
     try {
@@ -177,7 +178,7 @@ export default function VenderScreen() {
         declaracionPropiedad: 'si',
         origenLicito: origenLicito ? 'si' : 'no',
       });
-      Alert.alert('Solicitud enviada', 'La empresa revisara tu solicitud y definira el precio base y la comision. Veras el estado en "Mis Solicitudes".');
+      notify('Solicitud enviada', 'La empresa revisara tu solicitud y definira el precio base y la comision. Veras el estado en "Mis Solicitudes".');
       setDescripcion('');
       setDatosHistoricos('');
       setPrecioBase('');
@@ -191,7 +192,7 @@ export default function VenderScreen() {
       setTab('mis');
       fetchSolicitudes();
     } catch (err) {
-      Alert.alert('Error', getApiErrorMessage(err, 'Error al enviar solicitud'));
+      notify('Error', getApiErrorMessage(err, 'Error al enviar solicitud'));
     } finally {
       setLoading(false);
     }
@@ -200,38 +201,34 @@ export default function VenderScreen() {
   const handleRespuesta = async (id: number, acepta: string) => {
     try {
       await api.put(`/venta/solicitudes/${id}/respuesta`, { acepta });
-      Alert.alert('Listo', acepta === 'si' ? 'Acepto las condiciones' : 'Rechazo las condiciones');
+      notify('Listo', acepta === 'si' ? 'Acepto las condiciones' : 'Rechazo las condiciones');
       fetchSolicitudes();
     } catch (err) {
-      Alert.alert('Error', getApiErrorMessage(err, 'Error'));
+      notify('Error', getApiErrorMessage(err, 'Error'));
     }
   };
 
   const handleUpgradePoliza = async (id: number, nextPoliza?: Solicitud['siguientePoliza']) => {
     const diferencia = nextPoliza?.diferenciaSeguro ?? 0;
-    Alert.alert(
+    confirmAction(
       'Aumentar poliza',
       `Se abonara la diferencia del premio: ${formatMoneyWithCurrency(diferencia, 'ARS')}`,
-      [
-        { text: 'Cancelar', style: 'cancel' },
-        {
-          text: 'Elegir medio',
-          onPress: async () => {
-            try {
-              // Abrir modal con medios de pago verificados y activos
-              setSelectedSolicitudForUpgrade(id);
-              setModalMediosVisible(true);
-              setMediosLoading(true);
-              const resp = await api.get('/medios-pago');
-              setMedios(resp.data.data || []);
-            } catch (err) {
-              Alert.alert('Error', getApiErrorMessage(err, 'No se pudieron obtener medios de pago'));
-            } finally {
-              setMediosLoading(false);
-            }
-          },
-        },
-      ],
+      async () => {
+        try {
+          // Abrir modal con medios de pago verificados y activos
+          setSelectedSolicitudForUpgrade(id);
+          setModalMediosVisible(true);
+          setMediosLoading(true);
+          const resp = await api.get('/medios-pago');
+          setMedios(resp.data.data || []);
+        } catch (err) {
+          notify('Error', getApiErrorMessage(err, 'No se pudieron obtener medios de pago'));
+        } finally {
+          setMediosLoading(false);
+        }
+      },
+      'Elegir medio',
+      'Cancelar',
     );
   };
 
@@ -239,12 +236,12 @@ export default function VenderScreen() {
     if (!selectedSolicitudForUpgrade) return;
     try {
       await api.post(`/venta/solicitudes/${selectedSolicitudForUpgrade}/poliza/upgrade`, { medioDePagoId: medioId });
-      Alert.alert('Listo', 'La poliza fue actualizada');
+      notify('Listo', 'La poliza fue actualizada');
       setModalMediosVisible(false);
       setSelectedSolicitudForUpgrade(null);
       fetchSolicitudes();
     } catch (err) {
-      Alert.alert('Error', getApiErrorMessage(err, 'Error al actualizar la poliza'));
+      notify('Error', getApiErrorMessage(err, 'Error al actualizar la poliza'));
     }
   };
 

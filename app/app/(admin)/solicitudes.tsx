@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, StyleSheet, FlatList, ActivityIndicator } from 'react-native';
 import { Button, Input } from '../../src/components';
 import { colors, fonts, fontSizes, spacing, radius } from '../../src/theme';
 import adminApi from '../../src/services/adminApi';
 import { getApiErrorMessage } from '../../src/utils/apiError';
+import { notify } from '../../src/utils/notify';
 
 interface Solicitud {
   identificador: number;
@@ -40,7 +41,7 @@ export default function AdminSolicitudesScreen() {
       const { data } = await adminApi.get('/admin/venta/solicitudes');
       setItems(data.data);
     } catch (err) {
-      Alert.alert('Error', getApiErrorMessage(err, 'No se pudieron cargar las solicitudes'));
+      notify('Error', getApiErrorMessage(err, 'No se pudieron cargar las solicitudes'));
     } finally {
       setLoading(false);
     }
@@ -53,33 +54,33 @@ export default function AdminSolicitudesScreen() {
       await adminApi.put(`/admin/venta/solicitudes/${id}/inspeccionar`);
       load();
     } catch (err) {
-      Alert.alert('Error', getApiErrorMessage(err, 'No se pudo inspeccionar'));
+      notify('Error', getApiErrorMessage(err, 'No se pudo inspeccionar'));
     }
   };
 
   const aceptar = async (id: number) => {
     const base = Number(valorBase[id]);
     if (!Number.isFinite(base) || base <= 0) {
-      Alert.alert('Falta dato', 'Ingrese un precio base valido');
+      notify('Falta dato', 'Ingrese un precio base valido');
       return;
     }
     const com = comision[id] ? Number(comision[id]) : undefined;
     try {
       await adminApi.put(`/admin/venta/solicitudes/${id}/respuesta`, { acepta: 'si', valorBase: base, comision: com });
-      Alert.alert('Listo', 'Solicitud aceptada con condiciones');
+      notify('Listo', 'Solicitud aceptada con condiciones');
       load();
     } catch (err) {
-      Alert.alert('Error', getApiErrorMessage(err, 'No se pudo aceptar'));
+      notify('Error', getApiErrorMessage(err, 'No se pudo aceptar'));
     }
   };
 
   const rechazar = async (id: number) => {
     try {
       await adminApi.put(`/admin/venta/solicitudes/${id}/respuesta`, { acepta: 'no', motivoRechazo: motivo[id] || '' });
-      Alert.alert('Listo', 'Solicitud rechazada');
+      notify('Listo', 'Solicitud rechazada');
       load();
     } catch (err) {
-      Alert.alert('Error', getApiErrorMessage(err, 'No se pudo rechazar'));
+      notify('Error', getApiErrorMessage(err, 'No se pudo rechazar'));
     }
   };
 

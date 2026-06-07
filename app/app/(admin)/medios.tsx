@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, StyleSheet, FlatList, ActivityIndicator } from 'react-native';
 import { Button } from '../../src/components';
 import { colors, fonts, fontSizes, spacing, radius } from '../../src/theme';
 import adminApi from '../../src/services/adminApi';
 import { getApiErrorMessage } from '../../src/utils/apiError';
+import { notify } from '../../src/utils/notify';
 
 interface Medio {
   identificador: number;
@@ -28,7 +29,7 @@ export default function AdminMediosScreen() {
       const { data } = await adminApi.get('/admin/medios-pago', { params: { verificado: 'no' } });
       setMedios(data.data);
     } catch (err) {
-      Alert.alert('Error', getApiErrorMessage(err, 'No se pudieron cargar los medios'));
+      notify('Error', getApiErrorMessage(err, 'No se pudieron cargar los medios'));
     } finally {
       setLoading(false);
     }
@@ -41,7 +42,7 @@ export default function AdminMediosScreen() {
       await adminApi.put(`/admin/medios-pago/${id}/verificar`, { verificado });
       load();
     } catch (err) {
-      Alert.alert('Error', getApiErrorMessage(err, 'No se pudo actualizar'));
+      notify('Error', getApiErrorMessage(err, 'No se pudo actualizar'));
     }
   };
 

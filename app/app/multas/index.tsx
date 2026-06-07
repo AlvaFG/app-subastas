@@ -1,10 +1,11 @@
 import React, { useCallback, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, ActivityIndicator, Alert } from 'react-native';
+import { View, Text, StyleSheet, FlatList, ActivityIndicator } from 'react-native';
 import { router, useFocusEffect, Stack } from 'expo-router';
 import { Button } from '../../src/components';
 import { colors, fonts, fontSizes, spacing, radius, shadows } from '../../src/theme';
 import api from '../../src/services/api';
 import { getApiErrorMessage } from '../../src/utils/apiError';
+import { notify } from '../../src/utils/notify';
 
 interface Multa {
   identificador: number;
@@ -32,7 +33,7 @@ export default function MultasIndexScreen() {
       const { data } = await api.get('/multas');
       setMultas(data.data);
     } catch (err) {
-      Alert.alert('Error', getApiErrorMessage(err, 'No se pudieron cargar las multas'));
+      notify('Error', getApiErrorMessage(err, 'No se pudieron cargar las multas'));
     } finally {
       setLoading(false);
     }

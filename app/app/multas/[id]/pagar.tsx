@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, Alert, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, ScrollView } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '../../../src/components';
 import { colors, fonts, fontSizes, spacing, radius, shadows } from '../../../src/theme';
 import api from '../../../src/services/api';
+import { notify } from '../../../src/utils/notify';
 
 interface Multa {
   identificador: number;
@@ -55,7 +56,7 @@ export default function PagarMultaScreen() {
 
   const loadData = useCallback(async () => {
     if (!Number.isFinite(multaId)) {
-      Alert.alert('Error', 'Multa invalida');
+      notify('Error', 'Multa invalida');
       router.back();
       return;
     }
@@ -69,7 +70,7 @@ export default function PagarMultaScreen() {
 
       const multaEncontrada = (multaRes.data.data || []).find((item: Multa) => item.identificador === multaId) || null;
       if (!multaEncontrada) {
-        Alert.alert('Error', 'No se encontró la multa');
+        notify('Error', 'No se encontró la multa');
         router.back();
         return;
       }
@@ -86,7 +87,7 @@ export default function PagarMultaScreen() {
         ),
       );
     } catch (error) {
-      Alert.alert('Error', 'No se pudieron cargar los datos del pago');
+      notify('Error', 'No se pudieron cargar los datos del pago');
     } finally {
       setLoading(false);
     }
@@ -106,10 +107,10 @@ export default function PagarMultaScreen() {
     setPaying(true);
     try {
       await api.put(`/multas/${multa.identificador}/pagar`, { medioPagoId });
-      Alert.alert('Multa pagada', 'Ya puede volver a pujar en otra subasta.');
+      notify('Multa pagada', 'Ya puede volver a pujar en otra subasta.');
       router.back();
     } catch (error: any) {
-      Alert.alert('Error', error?.response?.data?.error || 'No se pudo pagar la multa');
+      notify('Error', error?.response?.data?.error || 'No se pudo pagar la multa');
     } finally {
       setPaying(false);
     }

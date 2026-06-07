@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, FlatList, TextInput, KeyboardAvoidingView, Platform, Alert, ScrollView, Image,
+  View, Text, StyleSheet, FlatList, TextInput, KeyboardAvoidingView, Platform, ScrollView, Image,
 } from 'react-native';
 import { useLocalSearchParams, Stack } from 'expo-router';
 import Animated, {
@@ -13,6 +13,7 @@ import { connectSocket, getSocket, disconnectSocket } from '../../../src/service
 import { useAuthStore } from '../../../src/store/authStore';
 import api from '../../../src/services/api';
 import { getApiErrorMessage } from '../../../src/utils/apiError';
+import { notify, confirmAction } from '../../../src/utils/notify';
 import type { MedioPago } from '../../../src/types';
 
 interface Bid {
@@ -157,7 +158,7 @@ export default function LiveAuctionScreen() {
     const applyJoinAck = (response?: SocketAck<JoinAuctionData>) => {
       if (!mounted) return;
       if (!response) {
-        Alert.alert('Error', 'No se recibio respuesta del servidor al unirse a la subasta.');
+        notify('Error', 'No se recibio respuesta del servidor al unirse a la subasta.');
         return;
       }
       if (response.success && response.data) {
@@ -179,7 +180,7 @@ export default function LiveAuctionScreen() {
           }
         }
       } else {
-        Alert.alert('Error', response.error || 'No se pudo unir a la subasta');
+        notify('Error', response.error || 'No se pudo unir a la subasta');
       }
     };
 
@@ -250,13 +251,13 @@ export default function LiveAuctionScreen() {
         // Item sold
         socket.on('item-sold', (data: ItemSoldPayload) => {
           if (!mounted) return;
-          Alert.alert('VENDIDO', `${data.ganadorNombre} gano por ${formatPrice(data.importe)}`);
+          notify('VENDIDO', `${data.ganadorNombre} gano por ${formatPrice(data.importe)}`);
         });
 
         // T606: No bids — company bought
         socket.on('item-no-bids', () => {
           if (!mounted) return;
-          Alert.alert('Sin pujas', 'La empresa adquirio el item al precio base.');
+          notify('Sin pujas', 'La empresa adquirio el item al precio base.');
         });
 
         // You won!
@@ -285,14 +286,14 @@ export default function LiveAuctionScreen() {
           setBidReason('La subasta ya fue cerrada');
           setBidReasonCode(null);
           setClosingInMs(null);
-          Alert.alert('Subasta cerrada', 'La subasta fue cerrada luego del pago final.');
+          notify('Subasta cerrada', 'La subasta fue cerrada luego del pago final.');
         });
 
       } catch (error: unknown) {
         if (!mounted) return;
         setConnectionStatus('disconnected');
         const msg = getApiErrorMessage(error, 'No se pudo conectar a la subasta');
-        Alert.alert('Error', msg);
+        notify('Error', msg);
       }
     })();
 
@@ -359,37 +360,37 @@ export default function LiveAuctionScreen() {
 
     const importe = parseFloat(bidInput);
     if (isNaN(importe) || importe <= 0) {
-      Alert.alert('Error', 'Ingrese un monto valido');
+      notify('Error', 'Ingrese un monto valido');
       return;
     }
 
     if (!currentItem) {
-      Alert.alert('Error', 'No hay item activo');
+      notify('Error', 'No hay item activo');
       return;
     }
 
     const base = Number(currentItem.precioBase || 0);
     const isHighCategory = currentCategory === 'oro' || currentCategory === 'platino';
     if (importe <= bestBid) {
-      Alert.alert('Puja rechazada', `La puja debe ser mayor a ${bestBid}`);
+      notify('Puja rechazada', `La puja debe ser mayor a ${bestBid}`);
       return;
     }
     if (!isHighCategory) {
       const minValido = bestBid + (base * 0.01);
       const maxValido = bestBid + (base * 0.20);
       if (importe < minValido) {
-        Alert.alert('Puja rechazada', `Puja minima: ${minValido.toFixed(2)}`);
+        notify('Puja rechazada', `Puja minima: ${minValido.toFixed(2)}`);
         return;
       }
       if (importe > maxValido) {
-        Alert.alert('Puja rechazada', `Puja maxima: ${maxValido.toFixed(2)}`);
+        notify('Puja rechazada', `Puja maxima: ${maxValido.toFixed(2)}`);
         return;
       }
     }
 
     const socket = getSocket();
     if (!socket) {
-      Alert.alert('Error', 'Sin conexion con la subasta');
+      notify('Error', 'Sin conexion con la subasta');
       return;
     }
 
@@ -409,7 +410,7 @@ export default function LiveAuctionScreen() {
       if (acked) return;
       acked = true;
       setIsBidding(false);
-      Alert.alert('Sin confirmacion', 'No se recibio confirmacion de la puja. Reintente.');
+      notify('Sin confirmacion', 'No se recibio confirmacion de la puja. Reintente.');
     }, BID_ACK_TIMEOUT_MS);
 
     socket.emit(
@@ -422,13 +423,13 @@ export default function LiveAuctionScreen() {
         setIsBidding(false);
         // A5-09: ack ausente -> error en vez de crash.
         if (!response) {
-          Alert.alert('Error', 'No se recibio respuesta del servidor.');
+          notify('Error', 'No se recibio respuesta del servidor.');
           return;
         }
         if (response.success) {
           setBidInput('');
         } else {
-          Alert.alert('Puja rechazada', response.error || 'No se pudo registrar la puja');
+          notify('Puja rechazada', response.error || 'No se pudo registrar la puja');
         }
       },
     );
@@ -436,7 +437,7 @@ export default function LiveAuctionScreen() {
 
   const confirmPayment = () => {
     if (!wonItem?.itemId || !selectedMedioPagoId) {
-      Alert.alert('Error', 'Seleccione un medio de pago');
+      notify('Error', 'Seleccione un medio de pago');
       return;
     }
     const socket = getSocket();
@@ -447,11 +448,11 @@ export default function LiveAuctionScreen() {
     socket.emit('confirm-payment', { itemId: wonItem.itemId, medioPagoId: selectedMedioPagoId, modoEntrega }, (response?: SocketAck<unknown>) => {
       // A5-09: ack ausente -> error en vez de crash.
       if (!response) {
-        Alert.alert('Error', 'No se recibio respuesta del servidor.');
+        notify('Error', 'No se recibio respuesta del servidor.');
         return;
       }
       if (response.success) {
-        Alert.alert('Pago confirmado', `Total pagado: ${formatPrice(total)}`);
+        notify('Pago confirmado', `Total pagado: ${formatPrice(total)}`);
         setShowPaymentModal(false);
         setWonItem(null);
         return;
@@ -461,10 +462,10 @@ export default function LiveAuctionScreen() {
       if (response.code === 'MULTA_APLICADA') {
         setShowPaymentModal(false);
         setWonItem(null);
-        Alert.alert('Multa aplicada', response.error || 'Se aplico una multa por incumplimiento de pago.');
+        notify('Multa aplicada', response.error || 'Se aplico una multa por incumplimiento de pago.');
         return;
       }
-      Alert.alert('Pago rechazado', response.error || 'No se pudo confirmar el pago');
+      notify('Pago rechazado', response.error || 'No se pudo confirmar el pago');
     });
   };
 
@@ -491,7 +492,7 @@ export default function LiveAuctionScreen() {
         setBestBid(Number(nuevoBestBid != null ? nuevoBestBid : (currentItem?.precioBase ?? 0)));
         setBestBidder(response.data?.bestBidder || '');
       } else {
-        Alert.alert('Error', response?.error || 'No se pudo cancelar el pago');
+        notify('Error', response?.error || 'No se pudo cancelar el pago');
       }
     });
   };
@@ -502,13 +503,12 @@ export default function LiveAuctionScreen() {
       return;
     }
 
-    Alert.alert(
+    confirmAction(
       'Cancelar compra',
       'Estas seguro que desea cancelar la compra y volver a la ultima oferta?',
-      [
-        { text: 'Seguir pagando', style: 'cancel' },
-        { text: 'Cancelar compra', style: 'destructive', onPress: performCancelPayment },
-      ],
+      performCancelPayment,
+      'Cancelar compra',
+      'Seguir pagando',
     );
   };
 
