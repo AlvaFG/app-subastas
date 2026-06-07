@@ -33,11 +33,16 @@ const io = new SocketServer(server, {
   cors: { origin: allowedOrigins, methods: ['GET', 'POST'], credentials: true },
 });
 
-// Rate limiting for auth
+// Rate limiting for auth (anti fuerza bruta). Configurable por env:
+//   AUTH_RATE_LIMIT_MAX = requests por IP cada 15 min (default 200, generoso).
+//   AUTH_RATE_LIMIT_MAX = 0  -> desactiva el limiter (util para testing/demo).
+// Nota: el login ademas tiene bloqueo por cuenta (failedAttempts/lockUntil), que
+// es la proteccion principal contra fuerza bruta — el limiter por IP es secundario.
+const AUTH_RATE_LIMIT_MAX = parseInt(process.env.AUTH_RATE_LIMIT_MAX || '200', 10);
 const authLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 15,
-  skip: () => process.env.NODE_ENV === 'test',
+  max: AUTH_RATE_LIMIT_MAX,
+  skip: () => process.env.NODE_ENV === 'test' || AUTH_RATE_LIMIT_MAX <= 0,
   message: { success: false, error: 'Demasiados intentos. Intente de nuevo en 15 minutos.' },
   standardHeaders: true,
   legacyHeaders: false,
