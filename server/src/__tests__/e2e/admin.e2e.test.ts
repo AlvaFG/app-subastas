@@ -16,10 +16,12 @@ jest.mock('../../socket/auctionHandler', () => ({
   setupAuctionSocket: jest.fn(),
 }));
 
-// El mail de admision no debe tocar SMTP en los tests.
+// Los mails no deben tocar SMTP en los tests.
 const mockSendAdmissionEmail = jest.fn().mockResolvedValue(true);
+const mockSendRejectionEmail = jest.fn().mockResolvedValue(true);
 jest.mock('../../services/email', () => ({
   sendAdmissionEmail: (...args: unknown[]) => mockSendAdmissionEmail(...args),
+  sendRejectionEmail: (...args: unknown[]) => mockSendRejectionEmail(...args),
 }));
 
 process.env.JWT_SECRET = 'test-secret';
@@ -33,6 +35,7 @@ function resetMocks() {
   mockRequest.mockClear();
   mockRequest.mockImplementation(() => ({ input: mockInput, query: mockQuery }));
   mockSendAdmissionEmail.mockClear();
+  mockSendRejectionEmail.mockClear();
 }
 
 const adminToken = jwt.sign({ id: 1, email: 'admin@subastas.com', rol: 'admin' }, process.env.JWT_SECRET!, { expiresIn: '1h' });
@@ -98,6 +101,42 @@ describe('Admin layer E2E', () => {
         .set('Authorization', `Bearer ${adminToken}`)
         .send({ admitido: 'si' });
       expect(res.status).toBe(404);
+    });
+  });
+
+  // ─── Rechazo de solicitudes (borrado) ───
+  describe('DELETE /api/admin/clientes/:id', () => {
+    it('rechaza, borra los datos y envia el mail', async () => {
+      // 1) SELECT datos (sin clave = solicitud pendiente)
+      mockQuery.mockResolvedValueOnce({ recordset: [{ email: 'ana@test.com', claveHash: null, nombre: 'Ana' }] });
+      // 2-7) DELETEs (sesiones, notificaciones, mediosDePago, documentosCliente, clientes, personas)
+      for (let i = 0; i < 6; i++) mockQuery.mockResolvedValueOnce({ recordset: [] });
+
+      const res = await request(app)
+        .delete('/api/admin/clientes/8')
+        .set('Authorization', `Bearer ${adminToken}`);
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(mockSendRejectionEmail).toHaveBeenCalledTimes(1);
+    });
+
+    it('404 si el cliente no existe', async () => {
+      mockQuery.mockResolvedValueOnce({ recordset: [] });
+      const res = await request(app)
+        .delete('/api/admin/clientes/999')
+        .set('Authorization', `Bearer ${adminToken}`);
+      expect(res.status).toBe(404);
+    });
+
+    it('400 si el cliente ya completo su registro (tiene clave)', async () => {
+      mockQuery.mockResolvedValueOnce({ recordset: [{ email: 'x@test.com', claveHash: 'hash', nombre: 'X' }] });
+      const res = await request(app)
+        .delete('/api/admin/clientes/2')
+        .set('Authorization', `Bearer ${adminToken}`);
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('ya completo');
+      expect(mockSendRejectionEmail).not.toHaveBeenCalled();
     });
   });
 

@@ -4,7 +4,7 @@ import { AuthRequest } from '../middleware/auth';
 import { connectDB } from '../models/db';
 import { CATEGORY_ORDER } from '../utils/category';
 import { getWebUrl } from '../config/env';
-import { sendAdmissionEmail } from '../services/email';
+import { sendAdmissionEmail, sendRejectionEmail } from '../services/email';
 
 // Ventana de validez del token de activacion enviado en el mail de admision.
 const ACTIVACION_TOKEN_TTL_DIAS = 7;
@@ -120,6 +120,59 @@ export async function admitirCliente(req: AuthRequest, res: Response): Promise<v
     res.json({ success: true, data: { mensaje: admitido === 'si' ? 'Cliente admitido' : 'Cliente rechazado' } });
   } catch (error) {
     console.error('Error admitirCliente:', error);
+    res.status(500).json({ success: false, error: 'Error interno del servidor' });
+  }
+}
+
+// DELETE /admin/clientes/:id — rechaza una solicitud de registro: borra al cliente
+// y todos sus datos, y le avisa por mail. Solo aplica a solicitudes (cuentas sin
+// clave creada). En la base quedan unicamente clientes reales ya completos.
+export async function rechazarCliente(req: AuthRequest, res: Response): Promise<void> {
+  try {
+    const { id } = req.params;
+    const pool = await connectDB();
+
+    const datos = await pool.request()
+      .input('id', id)
+      .query(`
+        SELECT c.email, c.claveHash, p.nombre
+        FROM clientes c
+        INNER JOIN personas p ON p.identificador = c.identificador
+        WHERE c.identificador = @id
+      `);
+
+    if (datos.recordset.length === 0) {
+      res.status(404).json({ success: false, error: 'Cliente no encontrado' });
+      return;
+    }
+
+    const cliente = datos.recordset[0];
+    // No borramos cuentas ya completas (registro terminado): el rechazo es solo
+    // para solicitudes pendientes. Una cuenta activa se gestiona por otra via.
+    if (cliente.claveHash) {
+      res.status(400).json({
+        success: false,
+        error: 'No se puede rechazar un cliente que ya completo su registro',
+      });
+      return;
+    }
+
+    // Borrar datos asociados antes del cliente/persona (respeta las FK).
+    for (const tabla of ['sesiones', 'notificaciones', 'mediosDePago', 'documentosCliente']) {
+      await pool.request().input('id', id)
+        .query(`DELETE FROM ${tabla} WHERE cliente = @id`);
+    }
+    await pool.request().input('id', id).query('DELETE FROM clientes WHERE identificador = @id');
+    await pool.request().input('id', id).query('DELETE FROM personas WHERE identificador = @id');
+
+    // Aviso por mail (best-effort: no bloquea el rechazo si falla el envio).
+    if (cliente.email) {
+      await sendRejectionEmail(cliente.email, cliente.nombre);
+    }
+
+    res.json({ success: true, data: { mensaje: 'Solicitud rechazada y datos eliminados' } });
+  } catch (error) {
+    console.error('Error rechazarCliente:', error);
     res.status(500).json({ success: false, error: 'Error interno del servidor' });
   }
 }

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { Link, router, useLocalSearchParams } from 'expo-router';
 import { Button, Input } from '../../../src/components';
 import { colors, fonts, fontSizes, spacing } from '../../../src/theme';
@@ -15,6 +15,7 @@ export default function RegisterStep2Screen() {
   const [confirmarClave, setConfirmarClave] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [completado, setCompletado] = useState(false);
   const registerStep2 = useAuthStore((s) => s.registerStep2);
 
   const handleSubmit = async () => {
@@ -35,11 +36,8 @@ export default function RegisterStep2Screen() {
     setLoading(true);
     try {
       await registerStep2({ token, clave });
-      Alert.alert(
-        'Registro completado',
-        'Ya puede iniciar sesion con su email y clave.',
-        [{ text: 'Ir a Login', onPress: () => router.replace('/(auth)/login') }],
-      );
+      // Feedback en pantalla (no Alert: no es confiable en web).
+      setCompletado(true);
     } catch (err) {
       setError(getApiErrorMessage(err, 'Error al completar registro'));
     } finally {
@@ -52,7 +50,15 @@ export default function RegisterStep2Screen() {
       <Text style={styles.title}>Registro - Etapa 2</Text>
       <Text style={styles.subtitle}>Crea tu clave para completar el registro</Text>
 
-      {!token ? (
+      {completado ? (
+        <>
+          <Text style={styles.successTitle}>¡Registro completado!</Text>
+          <Text style={styles.successText}>
+            Tu clave fue creada con exito. Ya podes iniciar sesion con tu email y clave.
+          </Text>
+          <Button title="Ir al login" size="lg" onPress={() => router.replace('/(auth)/login')} />
+        </>
+      ) : !token ? (
         <>
           <Text style={styles.error}>
             Enlace invalido o incompleto. Abri el enlace del email de admision para completar
@@ -98,4 +104,6 @@ const styles = StyleSheet.create({
   error: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.alertEmber, marginBottom: spacing.md, textAlign: 'center' },
   linkRow: { flexDirection: 'row', justifyContent: 'center', marginTop: spacing.lg },
   link: { fontFamily: fonts.bodySemibold, fontSize: fontSizes.sm, color: colors.auctionGold },
+  successTitle: { fontFamily: fonts.display, fontSize: fontSizes.xl, color: colors.textPrimary, marginBottom: spacing.sm, textAlign: 'center' },
+  successText: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.textSecondary, marginBottom: spacing.lg, textAlign: 'center', lineHeight: 20 },
 });
