@@ -55,6 +55,7 @@ describe('Auth E2E', () => {
       apellido: 'Perez',
       direccion: 'Calle 123',
       numeroPais: 1,
+      email: 'juan@test.com',
       fotoFrente: 'data:image/png;base64,AAA',
       fotoDorso: 'data:image/png;base64,BBB',
     };
@@ -62,15 +63,17 @@ describe('Auth E2E', () => {
     it('should register step1 successfully', async () => {
       // 1) check existing documento → none found
       mockQuery.mockResolvedValueOnce({ recordset: [] });
-      // 2) lookup verificador (empleado) → BSEC-02: id real en vez de hardcodear 1
-      mockQuery.mockResolvedValueOnce({ recordset: [{ identificador: 1 }] });
-      // 3) insert persona
-      mockQuery.mockResolvedValueOnce({ recordset: [{ identificador: 42 }] });
-      // 4) check numeroPais existe
-      mockQuery.mockResolvedValueOnce({ recordset: [{ numero: 1 }] });
-      // 5) insert cliente
+      // 2) check email en uso → none found
       mockQuery.mockResolvedValueOnce({ recordset: [] });
-      // 6) insert documentosCliente (REQ-02: persistir fotos del documento)
+      // 3) lookup verificador (empleado) → BSEC-02: id real en vez de hardcodear 1
+      mockQuery.mockResolvedValueOnce({ recordset: [{ identificador: 1 }] });
+      // 4) insert persona
+      mockQuery.mockResolvedValueOnce({ recordset: [{ identificador: 42 }] });
+      // 5) check numeroPais existe
+      mockQuery.mockResolvedValueOnce({ recordset: [{ numero: 1 }] });
+      // 6) insert cliente
+      mockQuery.mockResolvedValueOnce({ recordset: [] });
+      // 7) insert documentosCliente (REQ-02: persistir fotos del documento)
       mockQuery.mockResolvedValueOnce({ recordset: [] });
 
       const res = await request(app)
@@ -92,6 +95,29 @@ describe('Auth E2E', () => {
       expect(res.status).toBe(400);
       expect(res.body.success).toBe(false);
       expect(res.body.error).toContain('ya esta registrado');
+    });
+
+    it('should return 400 when email already registered', async () => {
+      mockQuery.mockResolvedValueOnce({ recordset: [] }); // documento libre
+      mockQuery.mockResolvedValueOnce({ recordset: [{ identificador: 7 }] }); // email en uso
+
+      const res = await request(app)
+        .post('/api/auth/register/step1')
+        .send(validBody);
+
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('email ya esta registrado');
+    });
+
+    it('should return 400 when email is missing', async () => {
+      const { email, ...sinEmail } = validBody;
+      void email;
+      const res = await request(app)
+        .post('/api/auth/register/step1')
+        .send(sinEmail);
+
+      expect(res.status).toBe(400);
+      expect(res.body.success).toBe(false);
     });
 
     it('should return 400 when documento is missing', async () => {
@@ -126,15 +152,14 @@ describe('Auth E2E', () => {
 
   describe('POST /api/auth/register/step2', () => {
     const validBody = {
-      identificador: 42,
-      email: 'juan@test.com',
+      token: 'a'.repeat(64),
       clave: 'Password123',
     };
 
-    it('should complete step2 successfully', async () => {
-      mockQuery.mockResolvedValueOnce({
-        recordset: [{ identificador: 42, admitido: 'si', email: null }],
-      });
+    it('should complete step2 successfully with a valid activation token', async () => {
+      // 1) lookup por hash de token (admitido, sin clave, no vencido) → encontrado
+      mockQuery.mockResolvedValueOnce({ recordset: [{ identificador: 42, categoria: 'comun' }] });
+      // 2) UPDATE clientes (clave + limpia token)
       mockQuery.mockResolvedValueOnce({ recordset: [] });
 
       const res = await request(app)
@@ -144,49 +169,33 @@ describe('Auth E2E', () => {
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.data.mensaje).toContain('Registro completado');
+      expect(res.body.data.categoria).toBe('comun');
     });
 
-    it('should return 404 when cliente not found', async () => {
+    it('should return 400 when the token is invalid or expired', async () => {
       mockQuery.mockResolvedValueOnce({ recordset: [] });
 
       const res = await request(app)
         .post('/api/auth/register/step2')
         .send(validBody);
 
-      expect(res.status).toBe(404);
-      expect(res.body.error).toContain('no encontrado');
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('invalido o expirado');
     });
 
-    it('should return 403 when cliente not yet admitido', async () => {
-      mockQuery.mockResolvedValueOnce({
-        recordset: [{ identificador: 42, admitido: 'no', email: null }],
-      });
-
+    it('should return 400 when token is missing', async () => {
       const res = await request(app)
         .post('/api/auth/register/step2')
-        .send(validBody);
-
-      expect(res.status).toBe(403);
-      expect(res.body.error).toContain('no ha sido admitido');
-    });
-
-    it('should return 400 when registration already completed', async () => {
-      mockQuery.mockResolvedValueOnce({
-        recordset: [{ identificador: 42, admitido: 'si', email: 'existing@test.com' }],
-      });
-
-      const res = await request(app)
-        .post('/api/auth/register/step2')
-        .send(validBody);
+        .send({ clave: 'Password123' });
 
       expect(res.status).toBe(400);
-      expect(res.body.error).toContain('ya fue completado');
+      expect(res.body.success).toBe(false);
     });
 
-    it('should return 400 when email is invalid', async () => {
+    it('should return 400 when clave is too weak', async () => {
       const res = await request(app)
         .post('/api/auth/register/step2')
-        .send({ identificador: 42, email: 'not-an-email', clave: 'password123' });
+        .send({ token: 'a'.repeat(64), clave: 'weak' });
 
       expect(res.status).toBe(400);
       expect(res.body.success).toBe(false);

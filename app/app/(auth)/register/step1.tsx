@@ -5,12 +5,14 @@ import * as ImagePicker from 'expo-image-picker';
 import { Button, Input } from '../../../src/components';
 import { colors, fonts, fontSizes, spacing } from '../../../src/theme';
 import { useAuthStore } from '../../../src/store/authStore';
+import { isValidEmail } from '../../../src/utils/validators';
 import countries from '../../../src/utils/countries';
 
 export default function RegisterStep1Screen() {
   const [nombre, setNombre] = useState('');
   const [apellido, setApellido] = useState('');
   const [documento, setDocumento] = useState('');
+  const [email, setEmail] = useState('');
   const [direccion, setDireccion] = useState('');
   const [numeroPais, setNumeroPais] = useState('');
   const [fotoFrente, setFotoFrente] = useState<string | null>(null);
@@ -36,8 +38,12 @@ export default function RegisterStep1Screen() {
 
   const handleSubmit = async () => {
     setError('');
-    if (!nombre || !apellido || !documento || !direccion || !numeroPais || !fotoFrente || !fotoDorso) {
+    if (!nombre || !apellido || !documento || !email || !direccion || !numeroPais || !fotoFrente || !fotoDorso) {
       setError('Complete todos los campos obligatorios');
+      return;
+    }
+    if (!isValidEmail(email)) {
+      setError('Ingrese un email valido');
       return;
     }
     setLoading(true);
@@ -48,6 +54,7 @@ export default function RegisterStep1Screen() {
         apellido,
         direccion,
         numeroPais: parseInt(numeroPais, 10),
+        email,
         fotoFrente,
         fotoDorso,
       });
@@ -66,8 +73,8 @@ export default function RegisterStep1Screen() {
       <View style={styles.pendingContainer}>
         <Text style={styles.title}>Registro recibido</Text>
         <Text style={styles.pendingText}>
-          La empresa revisara tus datos. Cuando seas admitido podras ingresar a la app
-          para crear tu clave y completar la etapa 2.
+          La empresa revisara tus datos. Cuando seas admitido te enviaremos un email
+          con un enlace para crear tu clave y completar la etapa 2.
         </Text>
         <Button title="Volver al inicio" size="lg" onPress={() => router.replace('/(auth)/login')} />
       </View>
@@ -83,6 +90,8 @@ export default function RegisterStep1Screen() {
       <Input label="Apellido" leftIcon="person-outline" placeholder="Perez" value={apellido} onChangeText={setApellido} />
 
       <Input label="Documento" leftIcon="card-outline" placeholder="12345678" value={documento} onChangeText={setDocumento} keyboardType="numeric" />
+
+      <Input label="Email" leftIcon="mail-outline" placeholder="tu@email.com" value={email} onChangeText={setEmail} keyboardType="email-address" autoCapitalize="none" />
 
       <Input label="Domicilio Legal" leftIcon="home-outline" placeholder="Av. Siempreviva 742" value={direccion} onChangeText={setDireccion} />
 

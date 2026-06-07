@@ -1,7 +1,13 @@
 import { Response } from 'express';
+import crypto from 'crypto';
 import { AuthRequest } from '../middleware/auth';
 import { connectDB } from '../models/db';
 import { CATEGORY_ORDER } from '../utils/category';
+import { getWebUrl } from '../config/env';
+import { sendAdmissionEmail } from '../services/email';
+
+// Ventana de validez del token de activacion enviado en el mail de admision.
+const ACTIVACION_TOKEN_TTL_DIAS = 7;
 
 // Capa administrativa/interna (A5/A6/A7/A9). Todas las rutas que montan estas
 // funciones van protegidas por authGuard + adminGuard, por lo que req.user.id es
@@ -71,6 +77,44 @@ export async function admitirCliente(req: AuthRequest, res: Response): Promise<v
     if (result.rowsAffected[0] === 0) {
       res.status(404).json({ success: false, error: 'Cliente no encontrado' });
       return;
+    }
+
+    // Al admitir: generar token de activacion de un solo uso y avisar por mail
+    // (TPO: "se le envia un mail informandole que debe completar el registro").
+    // Solo si el cliente todavia no creo su clave (registro incompleto).
+    if (admitido === 'si') {
+      const datos = await pool.request()
+        .input('id', id)
+        .query(`
+          SELECT c.email, c.claveHash, p.nombre
+          FROM clientes c
+          INNER JOIN personas p ON p.identificador = c.identificador
+          WHERE c.identificador = @id
+        `);
+      const cliente = datos.recordset[0];
+
+      if (cliente && !cliente.claveHash && cliente.email) {
+        const rawToken = crypto.randomBytes(32).toString('hex');
+        const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
+        const expira = new Date(Date.now() + ACTIVACION_TOKEN_TTL_DIAS * 24 * 60 * 60 * 1000);
+
+        await pool.request()
+          .input('id', id).input('hash', tokenHash).input('expira', expira)
+          .query(`UPDATE clientes
+                  SET activacionTokenHash = @hash, activacionTokenExpira = @expira
+                  WHERE identificador = @id`);
+
+        // Notificacion in-app (ademas del mail).
+        await pool.request()
+          .input('cliente', id)
+          .query(`INSERT INTO notificaciones (cliente, tipo, titulo, mensaje)
+                  VALUES (@cliente, 'sistema', 'Cuenta admitida',
+                          'Tu cuenta fue admitida. Revisa tu email para crear tu clave y completar el registro.')`);
+
+        // Best-effort: un fallo de envio no debe romper la admision.
+        const activationUrl = `${getWebUrl()}/register/step2?token=${rawToken}`;
+        await sendAdmissionEmail(cliente.email, activationUrl, cliente.nombre);
+      }
     }
 
     res.json({ success: true, data: { mensaje: admitido === 'si' ? 'Cliente admitido' : 'Cliente rechazado' } });
