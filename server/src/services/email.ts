@@ -76,6 +76,22 @@ export async function sendAdmissionEmail(
   return sendEmail({ to, subject: 'Tu cuenta fue admitida — Subastas', text, html });
 }
 
+/** Rejection email: tells a registrant their admission request was declined. */
+export async function sendRejectionEmail(to: string, nombre?: string): Promise<boolean> {
+  const saludo = nombre ? `Hola ${nombre},` : 'Hola,';
+  const text =
+    `${saludo}\n\n` +
+    'Lamentablemente, tras revisar tus datos, tu solicitud de registro en Subastas no fue aprobada.\n' +
+    'Tus datos fueron eliminados de nuestros sistemas.\n\n' +
+    'Si creas que se trata de un error, podes volver a registrarte o contactar a la empresa.';
+  const html =
+    `<p>${saludo}</p>` +
+    '<p>Lamentablemente, tras revisar tus datos, tu solicitud de registro en <b>Subastas</b> no fue aprobada.</p>' +
+    '<p>Tus datos fueron eliminados de nuestros sistemas.</p>' +
+    '<p>Si creas que se trata de un error, podes volver a registrarte o contactar a la empresa.</p>';
+  return sendEmail({ to, subject: 'Tu solicitud de registro — Subastas', text, html });
+}
+
 /** Password-recovery email with the one-time reset link. */
 export async function sendPasswordResetEmail(
   to: string,

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, KeyboardAvoidingView, Platform, ScrollView, Alert } from 'react-native';
+import { View, Text, StyleSheet, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
 import { Link, router, useLocalSearchParams } from 'expo-router';
 import { Button, Input } from '../../src/components';
 import { colors, fonts, fontSizes, spacing } from '../../src/theme';
@@ -15,6 +15,7 @@ export default function ResetPasswordScreen() {
   const [confirmarClave, setConfirmarClave] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [done, setDone] = useState(false);
 
   const handleSubmit = async () => {
     setError('');
@@ -34,11 +35,8 @@ export default function ResetPasswordScreen() {
     setLoading(true);
     try {
       await api.post('/auth/reset-password', { token, clave });
-      Alert.alert(
-        'Clave actualizada',
-        'Ya podes iniciar sesion con tu nueva clave.',
-        [{ text: 'Ir a Login', onPress: () => router.replace('/(auth)/login') }],
-      );
+      // Feedback en pantalla (no Alert: no es confiable en web).
+      setDone(true);
     } catch (err) {
       setError(getApiErrorMessage(err, 'No se pudo restablecer la clave'));
     } finally {
@@ -58,7 +56,19 @@ export default function ResetPasswordScreen() {
         </View>
 
         <View style={styles.form}>
-          {!token ? (
+          {done ? (
+            <>
+              <Text style={styles.successTitle}>Clave actualizada</Text>
+              <Text style={styles.successText}>
+                Ya podes iniciar sesion con tu nueva clave.
+              </Text>
+              <Button
+                title="Ir al login"
+                onPress={() => router.replace('/(auth)/login')}
+                size="lg"
+              />
+            </>
+          ) : !token ? (
             <>
               <Text style={styles.error}>
                 Enlace invalido o incompleto. Solicita uno nuevo desde la opcion de recuperar clave.
@@ -111,4 +121,6 @@ const styles = StyleSheet.create({
   error: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.alertEmber, marginBottom: spacing.md, textAlign: 'center' },
   linkRow: { flexDirection: 'row', justifyContent: 'center', marginTop: spacing.lg },
   link: { fontFamily: fonts.bodySemibold, fontSize: fontSizes.sm, color: colors.auctionGold },
+  successTitle: { fontFamily: fonts.display, fontSize: fontSizes.xl, color: colors.textPrimary, marginBottom: spacing.sm, textAlign: 'center' },
+  successText: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.textSecondary, marginBottom: spacing.lg, textAlign: 'center', lineHeight: 20 },
 });

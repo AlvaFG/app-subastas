@@ -36,22 +36,25 @@ export default function AdminClientesScreen() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Saca al cliente de la lista de pendientes (feedback inmediato, web-safe).
+  const quitarDeLista = (id: number) =>
+    setClientes((prev) => prev.filter((c) => c.identificador !== id));
+
   const admitir = async (id: number) => {
     const categoria = seleccion[id] || 'comun';
     try {
       await adminApi.patch(`/admin/clientes/${id}/admitir`, { admitido: 'si', categoria });
-      Alert.alert('Listo', 'Cliente admitido');
-      load();
+      quitarDeLista(id);
     } catch (err) {
       Alert.alert('Error', getApiErrorMessage(err, 'No se pudo admitir'));
     }
   };
 
+  // Rechazar = borrar la solicitud (el backend elimina los datos y avisa por mail).
   const rechazar = async (id: number) => {
     try {
-      await adminApi.patch(`/admin/clientes/${id}/admitir`, { admitido: 'no' });
-      Alert.alert('Listo', 'Cliente rechazado');
-      load();
+      await adminApi.delete(`/admin/clientes/${id}`);
+      quitarDeLista(id);
     } catch (err) {
       Alert.alert('Error', getApiErrorMessage(err, 'No se pudo rechazar'));
     }

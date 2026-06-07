@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { body } from 'express-validator';
 import {
-  listClientes, admitirCliente, asignarCategoria,
+  listClientes, admitirCliente, rechazarCliente, asignarCategoria,
   listMediosPago, verificarMedioPago,
   listSolicitudes, inspeccionarSolicitud, responderSolicitudAdmin,
   crearMultaAdmin,
@@ -26,6 +26,8 @@ router.patch('/clientes/:id/categoria',
   validate,
   asignarCategoria,
 );
+// Rechazo de solicitud: borra al cliente pendiente y le avisa por mail.
+router.delete('/clientes/:id', rechazarCliente);
 
 // Medios de pago
 router.get('/medios-pago', listMediosPago);
