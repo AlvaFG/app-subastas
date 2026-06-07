@@ -13,16 +13,16 @@ router.post('/register/step1',
   body('apellido').notEmpty().withMessage('Apellido requerido'),
   body('direccion').notEmpty().withMessage('Direccion requerida'),
   body('numeroPais').isInt().withMessage('Pais requerido'),
+  body('email').isEmail().withMessage('Email invalido'),
   body('fotoFrente').notEmpty().withMessage('fotoFrente requerida'),
   body('fotoDorso').notEmpty().withMessage('fotoDorso requerida'),
   validate,
   registerStep1,
 );
 
-// T204: Registro Etapa 2
+// T204: Registro Etapa 2 — completar con el token del mail de admision
 router.post('/register/step2',
-  body('identificador').isInt().withMessage('Identificador requerido'),
-  body('email').isEmail().withMessage('Email invalido'),
+  body('token').notEmpty().withMessage('Token requerido'),
   body('clave').isLength({ min: 8 }).withMessage('La clave debe tener al menos 8 caracteres')
     .matches(/[A-Z]/).withMessage('La clave debe contener al menos una mayuscula')
     .matches(/[0-9]/).withMessage('La clave debe contener al menos un numero'),

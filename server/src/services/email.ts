@@ -56,6 +56,26 @@ export async function sendEmail({ to, subject, text, html }: MailOptions): Promi
   }
 }
 
+/** Admission email: tells an approved registrant to set their password (etapa 2). */
+export async function sendAdmissionEmail(
+  to: string,
+  activationUrl: string,
+  nombre?: string
+): Promise<boolean> {
+  const saludo = nombre ? `Hola ${nombre},` : 'Hola,';
+  const text =
+    `${saludo}\n\n` +
+    '¡Buenas noticias! La empresa reviso tus datos y tu cuenta en Subastas fue admitida.\n' +
+    `Para completar el registro y crear tu clave, abri el siguiente enlace:\n\n${activationUrl}\n\n` +
+    'Una vez creada tu clave vas a poder iniciar sesion y participar de las subastas.';
+  const html =
+    `<p>${saludo}</p>` +
+    '<p>¡Buenas noticias! La empresa reviso tus datos y tu cuenta en <b>Subastas</b> fue admitida.</p>' +
+    `<p><a href="${activationUrl}">Crear mi clave y completar el registro</a></p>` +
+    '<p>Una vez creada tu clave vas a poder iniciar sesion y participar de las subastas.</p>';
+  return sendEmail({ to, subject: 'Tu cuenta fue admitida — Subastas', text, html });
+}
+
 /** Password-recovery email with the one-time reset link. */
 export async function sendPasswordResetEmail(
   to: string,

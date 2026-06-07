@@ -27,13 +27,13 @@ interface RegisterStep1Data {
   apellido?: string;
   direccion: string;
   numeroPais: number;
+  email: string;
   fotoFrente?: string;
   fotoDorso?: string;
 }
 
 interface RegisterStep2Data {
-  identificador: number;
-  email: string;
+  token: string;
   clave: string;
 }
 

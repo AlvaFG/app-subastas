@@ -16,6 +16,12 @@ jest.mock('../../socket/auctionHandler', () => ({
   setupAuctionSocket: jest.fn(),
 }));
 
+// El mail de admision no debe tocar SMTP en los tests.
+const mockSendAdmissionEmail = jest.fn().mockResolvedValue(true);
+jest.mock('../../services/email', () => ({
+  sendAdmissionEmail: (...args: unknown[]) => mockSendAdmissionEmail(...args),
+}));
+
 process.env.JWT_SECRET = 'test-secret';
 process.env.JWT_REFRESH_SECRET = 'test-refresh-secret';
 
@@ -26,6 +32,7 @@ function resetMocks() {
   mockInput.mockReset().mockReturnThis();
   mockRequest.mockClear();
   mockRequest.mockImplementation(() => ({ input: mockInput, query: mockQuery }));
+  mockSendAdmissionEmail.mockClear();
 }
 
 const adminToken = jwt.sign({ id: 1, email: 'admin@subastas.com', rol: 'admin' }, process.env.JWT_SECRET!, { expiresIn: '1h' });
@@ -57,14 +64,23 @@ describe('Admin layer E2E', () => {
 
   // ─── Admision de clientes ───
   describe('PATCH /api/admin/clientes/:id/admitir', () => {
-    it('admite y asigna categoria', async () => {
+    it('admite, asigna categoria y envia el mail de admision', async () => {
+      // 1) UPDATE admision
       mockQuery.mockResolvedValueOnce({ rowsAffected: [1], recordset: [] });
+      // 2) SELECT datos del cliente (email + claveHash null + nombre)
+      mockQuery.mockResolvedValueOnce({ recordset: [{ email: 'ana@test.com', claveHash: null, nombre: 'Ana' }] });
+      // 3) UPDATE token de activacion
+      mockQuery.mockResolvedValueOnce({ recordset: [] });
+      // 4) INSERT notificacion
+      mockQuery.mockResolvedValueOnce({ recordset: [] });
+
       const res = await request(app)
         .patch('/api/admin/clientes/42/admitir')
         .set('Authorization', `Bearer ${adminToken}`)
         .send({ admitido: 'si', categoria: 'plata' });
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
+      expect(mockSendAdmissionEmail).toHaveBeenCalledTimes(1);
     });
 
     it('400 con categoria invalida', async () => {

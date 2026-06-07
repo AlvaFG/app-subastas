@@ -70,7 +70,7 @@ async function saveDocumentPhotos(
 // T202: POST /auth/register/step1
 export async function registerStep1(req: Request, res: Response): Promise<void> {
   try {
-    const { documento, nombre, apellido, direccion, numeroPais, fotoFrente, fotoDorso } = req.body;
+    const { documento, nombre, apellido, direccion, numeroPais, email, fotoFrente, fotoDorso } = req.body;
 
     const pool = await connectDB();
 
@@ -81,6 +81,17 @@ export async function registerStep1(req: Request, res: Response): Promise<void> 
 
     if (existing.recordset.length > 0) {
       res.status(400).json({ success: false, error: 'El documento ya esta registrado' });
+      return;
+    }
+
+    // El email se pide en etapa 1 para poder avisarle por mail cuando sea admitido
+    // (TPO: "se le envia un mail informandole que debe completar el registro").
+    // Debe ser unico: el login identifica al cliente por email.
+    const emailEnUso = await pool.request()
+      .input('email', email)
+      .query('SELECT identificador FROM clientes WHERE email = @email');
+    if (emailEnUso.recordset.length > 0) {
+      res.status(400).json({ success: false, error: 'El email ya esta registrado' });
       return;
     }
 
@@ -137,7 +148,8 @@ export async function registerStep1(req: Request, res: Response): Promise<void> 
       .input('identificador', personaId)
       .input('admitido', 'no')
       .input('categoria', 'comun')
-      .input('verificador', verificadorId);
+      .input('verificador', verificadorId)
+      .input('email', email);
 
     if (numeroPaisToInsert !== null) {
       insertReq.input('numeroPais', sql.Int, numeroPaisToInsert);
@@ -146,8 +158,8 @@ export async function registerStep1(req: Request, res: Response): Promise<void> 
     }
 
     await insertReq.query(`
-      INSERT INTO clientes (identificador, numeroPais, admitido, categoria, verificador)
-      VALUES (@identificador, @numeroPais, @admitido, @categoria, @verificador)
+      INSERT INTO clientes (identificador, numeroPais, admitido, categoria, verificador, email)
+      VALUES (@identificador, @numeroPais, @admitido, @categoria, @verificador, @email)
     `);
 
     // Persistir las fotos del documento (REQ-02). No bloquea el registro si falla.
@@ -175,46 +187,45 @@ export async function registerStep1(req: Request, res: Response): Promise<void> 
 // T204: POST /auth/register/step2
 export async function registerStep2(req: Request, res: Response): Promise<void> {
   try {
-    const { identificador, email, clave } = req.body;
+    const { token, clave } = req.body;
 
     const pool = await connectDB();
 
-    // Verificar que el cliente existe y esta admitido
+    // El token de activacion viaja en el mail de admision. Validamos su hash, que
+    // no haya vencido, que el cliente este admitido y que aun no tenga clave.
+    const tokenHash = sha256(token);
     const cliente = await pool.request()
-      .input('identificador', identificador)
+      .input('hash', tokenHash)
       .query(`
-        SELECT c.identificador, c.admitido, c.email, c.categoria
-        FROM clientes c
-        WHERE c.identificador = @identificador
+        SELECT identificador, categoria
+        FROM clientes
+        WHERE activacionTokenHash = @hash
+          AND activacionTokenExpira > GETDATE()
+          AND admitido = 'si'
+          AND claveHash IS NULL
       `);
 
     if (cliente.recordset.length === 0) {
-      res.status(404).json({ success: false, error: 'Cliente no encontrado' });
+      res.status(400).json({ success: false, error: 'Token de activacion invalido o expirado' });
       return;
     }
 
-    if (cliente.recordset[0].admitido !== 'si') {
-      res.status(403).json({ success: false, error: 'Cliente aun no ha sido admitido' });
-      return;
-    }
+    const clienteId = cliente.recordset[0].identificador;
 
-    if (cliente.recordset[0].email) {
-      res.status(400).json({ success: false, error: 'El registro ya fue completado' });
-      return;
-    }
-
-    // Hashear clave y guardar. La categoria NO se toca aqui: queda la 'comun'
-    // asignada en etapa 1 (BSEC-01/REQ-01: nunca se asigna al azar).
+    // Hashear clave y guardar. La categoria NO se toca aqui: queda la asignada al
+    // admitir (BSEC-01/REQ-01: nunca se asigna al azar). El email ya se cargo en
+    // la etapa 1. Invalidamos el token de activacion (un solo uso).
     const claveHash = await bcrypt.hash(clave, 10);
 
     await pool.request()
-      .input('identificador', identificador)
-      .input('email', email)
+      .input('id', clienteId)
       .input('claveHash', claveHash)
       .query(`
         UPDATE clientes
-        SET email = @email, claveHash = @claveHash
-        WHERE identificador = @identificador
+        SET claveHash = @claveHash,
+            activacionTokenHash = NULL,
+            activacionTokenExpira = NULL
+        WHERE identificador = @id
       `);
 
     res.json({

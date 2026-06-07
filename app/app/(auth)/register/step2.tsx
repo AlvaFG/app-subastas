@@ -1,16 +1,16 @@
 import React, { useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, Alert } from 'react-native';
-import { router, useLocalSearchParams } from 'expo-router';
+import { Link, router, useLocalSearchParams } from 'expo-router';
 import { Button, Input } from '../../../src/components';
 import { colors, fonts, fontSizes, spacing } from '../../../src/theme';
-import { useAuthStore } from '../../../src/store/authStore';
-import { isValidEmail, validatePassword, PASSWORD_MIN_LENGTH } from '../../../src/utils/validators';
+import { validatePassword, PASSWORD_MIN_LENGTH } from '../../../src/utils/validators';
 import { getApiErrorMessage } from '../../../src/utils/apiError';
+import { useAuthStore } from '../../../src/store/authStore';
 
 export default function RegisterStep2Screen() {
-  const { identificador: identificadorParam } = useLocalSearchParams<{ identificador?: string }>();
-  const [identificador, setIdentificador] = useState(identificadorParam || '');
-  const [email, setEmail] = useState('');
+  const { token: tokenParam } = useLocalSearchParams<{ token?: string }>();
+  const token = typeof tokenParam === 'string' ? tokenParam : '';
+
   const [clave, setClave] = useState('');
   const [confirmarClave, setConfirmarClave] = useState('');
   const [error, setError] = useState('');
@@ -19,12 +19,8 @@ export default function RegisterStep2Screen() {
 
   const handleSubmit = async () => {
     setError('');
-    if (!identificador || !email || !clave || !confirmarClave) {
+    if (!clave || !confirmarClave) {
       setError('Complete todos los campos');
-      return;
-    }
-    if (!isValidEmail(email)) {
-      setError('Ingrese un email valido');
       return;
     }
     const claveError = validatePassword(clave);
@@ -38,11 +34,7 @@ export default function RegisterStep2Screen() {
     }
     setLoading(true);
     try {
-      await registerStep2({
-        identificador: parseInt(identificador),
-        email,
-        clave,
-      });
+      await registerStep2({ token, clave });
       Alert.alert(
         'Registro completado',
         'Ya puede iniciar sesion con su email y clave.',
@@ -58,46 +50,42 @@ export default function RegisterStep2Screen() {
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <Text style={styles.title}>Registro - Etapa 2</Text>
-      <Text style={styles.subtitle}>Complete su cuenta</Text>
+      <Text style={styles.subtitle}>Crea tu clave para completar el registro</Text>
 
-      <Input
-        label="Numero de identificador"
-        leftIcon="finger-print-outline"
-        placeholder="Recibido por email"
-        value={identificador}
-        onChangeText={setIdentificador}
-        keyboardType="numeric"
-        editable={!identificadorParam}
-      />
-      <Input
-        label="Email"
-        leftIcon="mail-outline"
-        placeholder="tu@email.com"
-        value={email}
-        onChangeText={setEmail}
-        keyboardType="email-address"
-        autoCapitalize="none"
-      />
-      <Input
-        label="Clave"
-        leftIcon="lock-closed-outline"
-        placeholder={`Minimo ${PASSWORD_MIN_LENGTH} caracteres`}
-        value={clave}
-        onChangeText={setClave}
-        isPassword
-      />
-      <Input
-        label="Confirmar Clave"
-        leftIcon="lock-closed-outline"
-        placeholder="Repita su clave"
-        value={confirmarClave}
-        onChangeText={setConfirmarClave}
-        isPassword
-      />
+      {!token ? (
+        <>
+          <Text style={styles.error}>
+            Enlace invalido o incompleto. Abri el enlace del email de admision para completar
+            tu registro.
+          </Text>
+          <View style={styles.linkRow}>
+            <Link href="/(auth)/login" style={styles.link}>Volver al login</Link>
+          </View>
+        </>
+      ) : (
+        <>
+          <Input
+            label="Clave"
+            leftIcon="lock-closed-outline"
+            placeholder={`Minimo ${PASSWORD_MIN_LENGTH} caracteres`}
+            value={clave}
+            onChangeText={setClave}
+            isPassword
+          />
+          <Input
+            label="Confirmar Clave"
+            leftIcon="lock-closed-outline"
+            placeholder="Repita su clave"
+            value={confirmarClave}
+            onChangeText={setConfirmarClave}
+            isPassword
+          />
 
-      {error ? <Text style={styles.error}>{error}</Text> : null}
+          {error ? <Text style={styles.error}>{error}</Text> : null}
 
-      <Button title="Completar Registro" onPress={handleSubmit} loading={loading} size="lg" />
+          <Button title="Completar Registro" onPress={handleSubmit} loading={loading} size="lg" />
+        </>
+      )}
     </ScrollView>
   );
 }
@@ -108,4 +96,6 @@ const styles = StyleSheet.create({
   title: { fontFamily: fonts.display, fontSize: fontSizes['2xl'], color: colors.textPrimary, marginBottom: spacing.xs },
   subtitle: { fontFamily: fonts.body, fontSize: fontSizes.base, color: colors.textSecondary, marginBottom: spacing.lg },
   error: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.alertEmber, marginBottom: spacing.md, textAlign: 'center' },
+  linkRow: { flexDirection: 'row', justifyContent: 'center', marginTop: spacing.lg },
+  link: { fontFamily: fonts.bodySemibold, fontSize: fontSizes.sm, color: colors.auctionGold },
 });
