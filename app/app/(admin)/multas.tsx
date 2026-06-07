@@ -1,9 +1,10 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, Alert } from 'react-native';
+import { View, Text, StyleSheet, ScrollView } from 'react-native';
 import { Button, Input } from '../../src/components';
 import { colors, fonts, fontSizes, spacing } from '../../src/theme';
 import adminApi from '../../src/services/adminApi';
 import { getApiErrorMessage } from '../../src/utils/apiError';
+import { notify } from '../../src/utils/notify';
 
 export default function AdminMultasScreen() {
   const [cliente, setCliente] = useState('');
@@ -20,16 +21,16 @@ export default function AdminMultasScreen() {
       importeOriginal: Number(importe),
     };
     if (![payload.cliente, payload.subasta, payload.item].every(Number.isInteger) || !(payload.importeOriginal > 0)) {
-      Alert.alert('Datos invalidos', 'Complete cliente, subasta, item (enteros) e importe (> 0).');
+      notify('Datos invalidos', 'Complete cliente, subasta, item (enteros) e importe (> 0).');
       return;
     }
     setLoading(true);
     try {
       const { data } = await adminApi.post('/admin/multas', payload);
-      Alert.alert('Multa aplicada', `Importe multa (10%): ${data.data.importeMulta} ${data.data.moneda}`);
+      notify('Multa aplicada', `Importe multa (10%): ${data.data.importeMulta} ${data.data.moneda}`);
       setCliente(''); setSubasta(''); setItem(''); setImporte('');
     } catch (err) {
-      Alert.alert('Error', getApiErrorMessage(err, 'No se pudo aplicar la multa'));
+      notify('Error', getApiErrorMessage(err, 'No se pudo aplicar la multa'));
     } finally {
       setLoading(false);
     }

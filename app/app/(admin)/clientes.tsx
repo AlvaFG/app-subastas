@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, FlatList, ActivityIndicator, TouchableOpacity, Alert } from 'react-native';
+import { View, Text, StyleSheet, FlatList, ActivityIndicator, TouchableOpacity } from 'react-native';
 import { Button } from '../../src/components';
 import { colors, fonts, fontSizes, spacing, radius } from '../../src/theme';
 import adminApi from '../../src/services/adminApi';
 import { getApiErrorMessage } from '../../src/utils/apiError';
+import { notify } from '../../src/utils/notify';
 
 const CATEGORIAS = ['comun', 'especial', 'plata', 'oro', 'platino'] as const;
 
@@ -28,7 +29,7 @@ export default function AdminClientesScreen() {
       const { data } = await adminApi.get('/admin/clientes', { params: { admitido: 'no' } });
       setClientes(data.data);
     } catch (err) {
-      Alert.alert('Error', getApiErrorMessage(err, 'No se pudieron cargar los clientes'));
+      notify('Error', getApiErrorMessage(err, 'No se pudieron cargar los clientes'));
     } finally {
       setLoading(false);
     }
@@ -46,7 +47,7 @@ export default function AdminClientesScreen() {
       await adminApi.patch(`/admin/clientes/${id}/admitir`, { admitido: 'si', categoria });
       quitarDeLista(id);
     } catch (err) {
-      Alert.alert('Error', getApiErrorMessage(err, 'No se pudo admitir'));
+      notify('Error', getApiErrorMessage(err, 'No se pudo admitir'));
     }
   };
 
@@ -56,7 +57,7 @@ export default function AdminClientesScreen() {
       await adminApi.delete(`/admin/clientes/${id}`);
       quitarDeLista(id);
     } catch (err) {
-      Alert.alert('Error', getApiErrorMessage(err, 'No se pudo rechazar'));
+      notify('Error', getApiErrorMessage(err, 'No se pudo rechazar'));
     }
   };
 

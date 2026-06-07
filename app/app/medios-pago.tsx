@@ -1,9 +1,10 @@
 import React, { useCallback, useMemo, useState } from 'react';
-import { Alert, FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { useFocusEffect } from 'expo-router';
 import { Button, Input } from '../src/components';
 import { colors, fontSizes, fonts, radius, shadows, spacing } from '../src/theme';
 import api from '../src/services/api';
+import { notify } from '../src/utils/notify';
 
 type TipoMedio = 'cuenta_bancaria' | 'tarjeta_credito' | 'cheque_certificado';
 
@@ -66,7 +67,7 @@ export default function MediosPagoScreen() {
       const { data } = await api.get('/medios-pago');
       setMedios(data.data || []);
     } catch {
-      Alert.alert('Error', 'No se pudieron cargar los medios de pago');
+      notify('Error', 'No se pudieron cargar los medios de pago');
     } finally {
       setLoading(false);
     }
@@ -92,7 +93,7 @@ export default function MediosPagoScreen() {
 
   const handleCreate = async () => {
     if (!descripcion.trim()) {
-      Alert.alert('Error', 'Ingrese una descripcion');
+      notify('Error', 'Ingrese una descripcion');
       return;
     }
 
@@ -102,11 +103,11 @@ export default function MediosPagoScreen() {
       if (editingMedioId !== null) {
         const montoNumerico = monto ? parseFloat(monto) : 0;
         if (montoNumerico <= 0) {
-          Alert.alert('Error', 'El monto debe ser mayor a 0');
+          notify('Error', 'El monto debe ser mayor a 0');
           return;
         }
         await api.put(`/medios-pago/${editingMedioId}/saldo`, { monto: montoNumerico });
-        Alert.alert('Listo', 'Saldo agregado correctamente');
+        notify('Listo', 'Saldo agregado correctamente');
         setEditingMedioId(null);
       } else {
         // Crear nuevo medio de pago
@@ -121,12 +122,12 @@ export default function MediosPagoScreen() {
           internacional,
           montoDisponible: monto ? parseFloat(monto) : 0,
         });
-        Alert.alert('Listo', 'Medio de pago agregado y saldo actualizado');
+        notify('Listo', 'Medio de pago agregado y saldo actualizado');
       }
       resetForm();
       await fetchMedios();
     } catch (err: any) {
-      Alert.alert('Error', err?.response?.data?.error || 'No se pudo completar la operación');
+      notify('Error', err?.response?.data?.error || 'No se pudo completar la operación');
     } finally {
       setSaving(false);
     }
@@ -137,7 +138,7 @@ export default function MediosPagoScreen() {
       await api.delete(`/medios-pago/${id}`);
       await fetchMedios();
     } catch {
-      Alert.alert('Error', 'No se pudo eliminar el medio de pago');
+      notify('Error', 'No se pudo eliminar el medio de pago');
     }
   };
 
