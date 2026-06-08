@@ -1,6 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, RefreshControl } from 'react-native';
-import { router } from 'expo-router';
+import { router, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, fonts, fontSizes, spacing, shadows, radius } from '../src/theme';
 import { useAuthStore } from '../src/store/authStore';
@@ -138,6 +138,7 @@ export default function NotificacionesScreen() {
   if (loading) {
     return (
       <View style={styles.center}>
+        <Stack.Screen options={{ headerShown: true, title: 'Notificaciones' }} />
         <ActivityIndicator size="large" color={colors.auctionGold} />
       </View>
     );
@@ -145,7 +146,7 @@ export default function NotificacionesScreen() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Notificaciones</Text>
+      <Stack.Screen options={{ headerShown: true, title: 'Notificaciones' }} />
       {multasImpagas.length > 0 && (
         <View style={styles.penaltyBanner}>
           <Text style={styles.penaltyTitle}>Tenes multas impagas</Text>

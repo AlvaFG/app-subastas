@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { View, Text, StyleSheet, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
+import { View, Text, StyleSheet, KeyboardAvoidingView, Platform, ScrollView, Image } from 'react-native';
 import { Link, router } from 'expo-router';
 import { Button, Input } from '../../src/components';
 import { colors, fonts, fontSizes, spacing } from '../../src/theme';
@@ -42,7 +42,7 @@ export default function LoginScreen() {
     >
       <ScrollView contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
         <View style={styles.header}>
-          <Text style={styles.title}>Subastas</Text>
+          <Image source={require('../../assets/logo.png')} style={styles.logo} resizeMode="contain" />
           <Text style={styles.subtitle}>Inicia sesion para participar</Text>
         </View>
 
@@ -89,6 +89,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.ink },
   scroll: { flexGrow: 1, justifyContent: 'center', padding: spacing.lg },
   header: { alignItems: 'center', marginBottom: spacing['2xl'] },
+  logo: { width: 180, height: 180, marginBottom: spacing.md },
   title: { fontFamily: fonts.display, fontSize: fontSizes.hero, color: colors.auctionGold },
   subtitle: { fontFamily: fonts.body, fontSize: fontSizes.base, color: colors.textMuted, marginTop: spacing.sm },
   form: { backgroundColor: colors.ivory, borderRadius: 16, padding: spacing.lg },

@@ -1,6 +1,6 @@
 import React, { useCallback, useState } from 'react';
 import { FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, Stack } from 'expo-router';
 import { Button, Input } from '../src/components';
 import { colors, fontSizes, fonts, radius, shadows, spacing } from '../src/theme';
 import api from '../src/services/api';
@@ -98,6 +98,7 @@ export default function CuentasVistaScreen() {
 
   return (
     <View style={styles.container}>
+      <Stack.Screen options={{ headerShown: true, title: 'Cuentas a la Vista' }} />
       <FlatList
         data={cuentas}
         keyExtractor={(item) => item.identificador.toString()}
@@ -105,7 +106,6 @@ export default function CuentasVistaScreen() {
         onRefresh={fetchCuentas}
         ListHeaderComponent={
           <View>
-            <Text style={styles.title}>Cuentas a la Vista</Text>
             <Text style={styles.subtitle}>
               Cuenta donde recibiras el dinero de tus ventas. Debe declararse antes de que tu bien entre en subasta.
             </Text>

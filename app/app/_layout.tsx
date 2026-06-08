@@ -1,17 +1,24 @@
 import { useEffect } from 'react';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useFonts, PlayfairDisplay_700Bold } from '@expo-google-fonts/playfair-display';
-import { DMSans_400Regular, DMSans_500Medium, DMSans_600SemiBold, DMSans_700Bold } from '@expo-google-fonts/dm-sans';
+import {
+  useFonts,
+  Barlow_400Regular,
+  Barlow_500Medium,
+  Barlow_600SemiBold,
+  Barlow_700Bold,
+  Barlow_800ExtraBold,
+} from '@expo-google-fonts/barlow';
 import { useAuthStore } from '../src/store/authStore';
+import { colors, fonts } from '../src/theme';
 
 export default function RootLayout() {
   const [fontsLoaded] = useFonts({
-    PlayfairDisplay_700Bold,
-    DMSans_400Regular,
-    DMSans_500Medium,
-    DMSans_600SemiBold,
-    DMSans_700Bold,
+    Barlow_400Regular,
+    Barlow_500Medium,
+    Barlow_600SemiBold,
+    Barlow_700Bold,
+    Barlow_800ExtraBold,
   });
 
   const { isAuthenticated, isLoading, loadUser } = useAuthStore();
@@ -44,7 +51,17 @@ export default function RootLayout() {
   return (
     <>
       <StatusBar style="light" />
-      <Stack screenOptions={{ headerShown: false }}>
+      <Stack
+        screenOptions={{
+          headerShown: false,
+          headerStyle: { backgroundColor: colors.ivory },
+          headerTintColor: colors.auctionGold,
+          headerTitleStyle: { color: colors.textPrimary, fontFamily: fonts.headingSemibold },
+          headerTitleAlign: 'center',
+          headerShadowVisible: false,
+          headerBackTitle: 'Volver',
+        }}
+      >
         <Stack.Screen name="(auth)" />
         <Stack.Screen name="(admin)" />
         <Stack.Screen name="(tabs)" />
