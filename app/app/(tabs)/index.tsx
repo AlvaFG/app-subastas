@@ -1,6 +1,6 @@
 import React, { useRef, useState, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, FlatList, RefreshControl, TouchableOpacity, Image, AppState,
+  View, Text, StyleSheet, FlatList, RefreshControl, TouchableOpacity, Image, AppState, useWindowDimensions,
 } from 'react-native';
 import { router, useFocusEffect } from 'expo-router';
 import axios from 'axios';
@@ -32,6 +32,9 @@ export default function SubastasScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [filtro, setFiltro] = useState<string>('todas');
   const abortRef = useRef<AbortController | null>(null);
+  // En pantallas anchas la navbar superior ya muestra el logo + marca,
+  // asi que evitamos duplicar el header in-page.
+  const isWide = useWindowDimensions().width >= 768;
 
   const fetchSubastas = useCallback(async () => {
     // Cancela cualquier request en vuelo antes de iniciar uno nuevo
@@ -155,10 +158,12 @@ export default function SubastasScreen() {
 
   return (
     <View style={styles.container}>
-      <View style={styles.topBar}>
-        <Image source={require('../../assets/logo.png')} style={styles.logo} resizeMode="contain" />
-        <Text style={styles.title}>Subastas</Text>
-      </View>
+      {!isWide && (
+        <View style={styles.topBar}>
+          <Image source={require('../../assets/logo.png')} style={styles.logo} resizeMode="contain" />
+          <Text style={styles.title}>Subastas</Text>
+        </View>
+      )}
 
       <View style={styles.filters}>
         {FILTERS.map((f) => (
