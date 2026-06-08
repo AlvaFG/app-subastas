@@ -883,6 +883,20 @@ export async function createCuentaVista(req: AuthRequest, res: Response): Promis
     const { banco, numeroCuenta, cbu, moneda, pais } = req.body;
     const pool = await connectDB();
 
+    // cuentasAVista.duenio es FK a duenios. La cuenta se declara ANTES de aceptar
+    // las condiciones (que es cuando normalmente se crea el duenio), por lo que
+    // aseguramos el registro de duenio aca para no violar la FK.
+    const duenioCheck = await pool.request()
+      .input('clienteId', req.user!.id)
+      .query('SELECT identificador FROM duenios WHERE identificador = @clienteId');
+
+    if (duenioCheck.recordset.length === 0) {
+      await pool.request()
+        .input('identificador', req.user!.id)
+        .input('verificador', 1)
+        .query('INSERT INTO duenios (identificador, verificador) VALUES (@identificador, @verificador)');
+    }
+
     const result = await pool.request()
       .input('duenio', req.user!.id)
       .input('banco', banco)
@@ -899,6 +913,33 @@ export async function createCuentaVista(req: AuthRequest, res: Response): Promis
     res.status(201).json({ success: true, data: { identificador: result.recordset[0].identificador } });
   } catch (error) {
     console.error('Error createCuentaVista:', error);
+    res.status(500).json({ success: false, error: 'Error interno del servidor' });
+  }
+}
+
+export async function deleteCuentaVista(req: AuthRequest, res: Response): Promise<void> {
+  try {
+    const id = getParamAsString(req.params.id);
+    if (!id) {
+      res.status(400).json({ success: false, error: 'Id de cuenta invalido' });
+      return;
+    }
+
+    const pool = await connectDB();
+    // Baja logica: solo afecta cuentas propias del usuario.
+    const result = await pool.request()
+      .input('id', id)
+      .input('duenio', req.user!.id)
+      .query("UPDATE cuentasAVista SET activa = 'no' WHERE identificador = @id AND duenio = @duenio");
+
+    if (result.rowsAffected[0] === 0) {
+      res.status(404).json({ success: false, error: 'Cuenta no encontrada' });
+      return;
+    }
+
+    res.json({ success: true, data: { identificador: Number(id) } });
+  } catch (error) {
+    console.error('Error deleteCuentaVista:', error);
     res.status(500).json({ success: false, error: 'Error interno del servidor' });
   }
 }

@@ -3,7 +3,7 @@ import { body } from 'express-validator';
 import {
   createSolicitud, getSolicitudes, getSolicitudDetalle, getEstadoSubastaSolicitud, responderSolicitud,
   upgradePolizaSolicitud,
-  getCuentasVista, createCuentaVista,
+  getCuentasVista, createCuentaVista, deleteCuentaVista,
 } from '../controllers/ventaController';
 import { authGuard } from '../middleware/auth';
 import { validate } from '../middleware/validate';
@@ -48,5 +48,7 @@ router.post('/cuentas',
   validate,
   createCuentaVista,
 );
+
+router.delete('/cuentas/:id', deleteCuentaVista);
 
 export default router;
