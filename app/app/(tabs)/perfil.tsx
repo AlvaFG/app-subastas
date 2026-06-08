@@ -65,6 +65,13 @@ export default function PerfilScreen() {
       />
 
       <Button
+        title="Cuentas a la Vista"
+        variant="secondary"
+        onPress={() => router.push('/cuentas-vista')}
+        style={{ marginTop: spacing.sm }}
+      />
+
+      <Button
         title="Mis Multas"
         variant="secondary"
         onPress={() => router.push('/multas')}

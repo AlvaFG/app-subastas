@@ -204,7 +204,18 @@ export default function VenderScreen() {
       notify('Listo', acepta === 'si' ? 'Acepto las condiciones' : 'Rechazo las condiciones');
       fetchSolicitudes();
     } catch (err) {
-      notify('Error', getApiErrorMessage(err, 'Error'));
+      const message = getApiErrorMessage(err, 'Error');
+      // Si falta declarar la cuenta a la vista, ofrecer ir a declararla.
+      if (/cuenta a la vista/i.test(message)) {
+        confirmAction(
+          'Falta una cuenta a la vista',
+          `${message}\n\nDeclara una cuenta donde recibir el dinero de tu venta y volve a aceptar las condiciones.`,
+          () => router.push('/cuentas-vista'),
+          'Declarar cuenta',
+        );
+        return;
+      }
+      notify('Error', message);
     }
   };
 
