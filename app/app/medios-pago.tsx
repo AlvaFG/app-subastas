@@ -1,6 +1,6 @@
 import React, { useCallback, useMemo, useState } from 'react';
 import { FlatList, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, Stack } from 'expo-router';
 import { Button, Input } from '../src/components';
 import { colors, fontSizes, fonts, radius, shadows, spacing } from '../src/theme';
 import api from '../src/services/api';
@@ -153,6 +153,7 @@ export default function MediosPagoScreen() {
 
   return (
     <View style={styles.container}>
+      <Stack.Screen options={{ headerShown: true, title: 'Medios de Pago' }} />
       <FlatList
         data={medios}
         keyExtractor={(item) => item.identificador.toString()}
@@ -160,7 +161,6 @@ export default function MediosPagoScreen() {
         onRefresh={fetchMedios}
         ListHeaderComponent={
           <View>
-            <Text style={styles.title}>Medios de Pago</Text>
             <Text style={styles.subtitle}>Simulador de fondos para subasta</Text>
 
             <View style={[styles.balanceCard, shadows.sm]}>

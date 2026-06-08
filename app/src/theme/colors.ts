@@ -1,33 +1,33 @@
 export const colors = {
   // Primarios
-  ink: '#0B0E11',
-  ivory: '#FAF8F5',
-  parchment: '#F2EDE6',
-  graphite: '#1A1D23',
+  ink: '#070542',        // navy-violeta casi negro (texto sobre acentos, superficies oscuras)
+  ivory: '#f4f4ff',      // fondo principal (lo mas claro de la paleta)
+  parchment: '#e4e4ff',  // superficie secundaria (chips/cards) — tint claro derivado de #9696ff
+  graphite: '#1e0069',   // violeta profundo (superficie/acento oscuro alternativo)
 
   // Acentos
-  auctionGold: '#C9A84C',
-  bidGreen: '#2D936C',
-  alertEmber: '#D64545',
-  steelBlue: '#4A7C9B',
+  auctionGold: '#ffaf5c',  // CTA primario / destacados (naranja) — antes dorado
+  bidGreen: '#00ffb3',     // exito / puja ganadora (teal)
+  alertEmber: '#e5484d',   // peligro / error — la paleta no trae rojo; se mantiene uno por semantica
+  steelBlue: '#5d51fc',    // info / estado pendiente (periwinkle)
 
-  // Categorias
-  catComun: '#8B8D91',
-  catEspecial: '#5B7FA5',
-  catPlata: '#A8B5C2',
-  catOro: '#C9A84C',
-  catPlatino: '#E8E4DF',
+  // Categorias (5 distinguibles entre si)
+  catComun: '#606060',     // gris
+  catEspecial: '#2309d6',  // azul vivo
+  catPlata: '#9696ff',     // lavanda
+  catOro: '#ffaf5c',       // naranja
+  catPlatino: '#5d51fc',   // periwinkle
 
   // Neutros
-  textPrimary: '#1A1D23',
-  textSecondary: '#6B7280',
-  textMuted: '#9CA3AF',
-  border: '#E5E1DB',
-  borderDark: '#2A2D33',
+  textPrimary: '#070542',   // texto principal
+  textSecondary: '#606060', // texto secundario (gris)
+  textMuted: '#9696ff',     // texto atenuado (lavanda)
+  border: '#d6d6f5',        // divisores suaves — tint derivado de #9696ff
+  borderDark: '#1e0069',
 
   // Transparencias
-  overlay: 'rgba(11,14,17,0.6)',
-  goldGlow: 'rgba(201,168,76,0.25)',
+  overlay: 'rgba(7,5,66,0.6)',      // derivado de ink
+  goldGlow: 'rgba(255,175,92,0.25)', // derivado del acento naranja
 } as const;
 
 export type ColorName = keyof typeof colors;

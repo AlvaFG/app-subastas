@@ -153,3 +153,72 @@ export async function getHistorialPujas(req: AuthRequest, res: Response): Promis
     res.status(500).json({ success: false, error: 'Error interno del servidor' });
   }
 }
+
+// GET /usuarios/mis-compras — bienes que el usuario adquirio (es el cliente del registro)
+export async function getMisCompras(req: AuthRequest, res: Response): Promise<void> {
+  try {
+    const pool = await connectDB();
+    const result = await pool.request()
+      .input('cliente', req.user!.id)
+      .query(`
+        SELECT r.identificador, r.importe, r.comision, r.modoEntrega, r.costoEnvio, r.seguroComprador,
+               r.subasta, s.fecha AS subastaFecha, s.moneda,
+               r.producto AS productoId, pr.descripcionCompleta, pr.descripcionCatalogo,
+               per.nombre AS vendedorNombre
+        FROM registroDeSubasta r
+        INNER JOIN subastas s ON s.identificador = r.subasta
+        INNER JOIN productos pr ON pr.identificador = r.producto
+        LEFT JOIN personas per ON per.identificador = r.duenio
+        WHERE r.cliente = @cliente
+        ORDER BY r.identificador DESC
+      `);
+
+    const data = result.recordset.map((row) => ({
+      ...row,
+      importe: parseFloat(row.importe),
+      comision: parseFloat(row.comision),
+      costoEnvio: row.costoEnvio != null ? parseFloat(row.costoEnvio) : null,
+      // Lo que efectivamente pago el comprador: precio + envio.
+      totalPagado: parseFloat(row.importe) + (row.costoEnvio != null ? parseFloat(row.costoEnvio) : 0),
+    }));
+
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Error getMisCompras:', error);
+    res.status(500).json({ success: false, error: 'Error interno del servidor' });
+  }
+}
+
+// GET /usuarios/mis-ventas — bienes que el usuario vendio (es el duenio del registro)
+export async function getMisVentas(req: AuthRequest, res: Response): Promise<void> {
+  try {
+    const pool = await connectDB();
+    const result = await pool.request()
+      .input('duenio', req.user!.id)
+      .query(`
+        SELECT r.identificador, r.importe, r.comision, r.modoEntrega,
+               r.subasta, s.fecha AS subastaFecha, s.moneda,
+               r.producto AS productoId, pr.descripcionCompleta, pr.descripcionCatalogo,
+               per.nombre AS compradorNombre
+        FROM registroDeSubasta r
+        INNER JOIN subastas s ON s.identificador = r.subasta
+        INNER JOIN productos pr ON pr.identificador = r.producto
+        LEFT JOIN personas per ON per.identificador = r.cliente
+        WHERE r.duenio = @duenio
+        ORDER BY r.identificador DESC
+      `);
+
+    const data = result.recordset.map((row) => ({
+      ...row,
+      importe: parseFloat(row.importe),
+      comision: parseFloat(row.comision),
+      // Lo que recibe el vendedor en su cuenta a la vista: precio menos comision.
+      totalRecibido: parseFloat(row.importe) - parseFloat(row.comision),
+    }));
+
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error('Error getMisVentas:', error);
+    res.status(500).json({ success: false, error: 'Error interno del servidor' });
+  }
+}

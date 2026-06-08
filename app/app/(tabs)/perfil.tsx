@@ -44,10 +44,17 @@ export default function PerfilScreen() {
       </View>
 
       <Button
+        title="Mis Compras y Ventas"
+        variant="secondary"
+        onPress={() => router.push('/mis-transacciones')}
+        style={{ marginTop: spacing.md }}
+      />
+
+      <Button
         title="Mis Estadisticas"
         variant="secondary"
         onPress={() => router.push('/estadisticas')}
-        style={{ marginTop: spacing.md }}
+        style={{ marginTop: spacing.sm }}
       />
 
       <Button

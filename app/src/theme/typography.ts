@@ -1,12 +1,12 @@
 export const fonts = {
-  display: 'PlayfairDisplay_700Bold',
-  heading: 'DMSans_700Bold',
-  headingSemibold: 'DMSans_600SemiBold',
-  headingMedium: 'DMSans_500Medium',
-  body: 'DMSans_400Regular',
-  bodyMedium: 'DMSans_500Medium',
-  bodySemibold: 'DMSans_600SemiBold',
-  bodyBold: 'DMSans_700Bold',
+  display: 'Barlow_800ExtraBold',
+  heading: 'Barlow_700Bold',
+  headingSemibold: 'Barlow_600SemiBold',
+  headingMedium: 'Barlow_500Medium',
+  body: 'Barlow_400Regular',
+  bodyMedium: 'Barlow_500Medium',
+  bodySemibold: 'Barlow_600SemiBold',
+  bodyBold: 'Barlow_700Bold',
 } as const;
 
 export const fontSizes = {

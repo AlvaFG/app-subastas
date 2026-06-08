@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ScrollView, ActivityIndicator } from 'react-native';
-import { router } from 'expo-router';
+import { router, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { colors, fonts, fontSizes, spacing, shadows, radius } from '../src/theme';
 import { useAuthStore } from '../src/store/authStore';
@@ -50,6 +50,7 @@ export default function EstadisticasScreen() {
   if (loading) {
     return (
       <View style={styles.center}>
+        <Stack.Screen options={{ headerShown: true, title: 'Mis Estadisticas' }} />
         <ActivityIndicator size="large" color={colors.auctionGold} />
       </View>
     );
@@ -58,6 +59,7 @@ export default function EstadisticasScreen() {
   if (!data) {
     return (
       <View style={styles.center}>
+        <Stack.Screen options={{ headerShown: true, title: 'Mis Estadisticas' }} />
         <Text style={styles.errorText}>No se pudieron cargar las estadisticas</Text>
       </View>
     );
@@ -75,7 +77,7 @@ export default function EstadisticasScreen() {
 
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.content}>
-      <Text style={styles.title}>Mis Estadisticas</Text>
+      <Stack.Screen options={{ headerShown: true, title: 'Mis Estadisticas' }} />
 
       <View style={styles.grid}>
         <StatCard icon="hammer" label="Subastas Asistidas" value={data.subastasAsistidas} />

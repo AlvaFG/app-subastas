@@ -155,7 +155,10 @@ export default function SubastasScreen() {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Subastas</Text>
+      <View style={styles.topBar}>
+        <Image source={require('../../assets/logo.png')} style={styles.logo} resizeMode="contain" />
+        <Text style={styles.title}>Subastas</Text>
+      </View>
 
       <View style={styles.filters}>
         {FILTERS.map((f) => (
@@ -195,7 +198,9 @@ export default function SubastasScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.ivory },
-  title: { fontFamily: fonts.display, fontSize: fontSizes['2xl'], color: colors.textPrimary, paddingHorizontal: spacing.lg, paddingTop: spacing.lg },
+  topBar: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm, paddingHorizontal: spacing.lg, paddingTop: spacing.lg },
+  logo: { width: 40, height: 40 },
+  title: { fontFamily: fonts.display, fontSize: fontSizes['2xl'], color: colors.textPrimary },
   filters: { flexDirection: 'row', paddingHorizontal: spacing.lg, paddingVertical: spacing.md, gap: spacing.sm },
   filterChip: { paddingHorizontal: spacing.md, paddingVertical: spacing.sm, borderRadius: radius.xl, backgroundColor: colors.parchment },
   filterActive: { backgroundColor: colors.auctionGold },
