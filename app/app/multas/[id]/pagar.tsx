@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { View, Text, StyleSheet, FlatList, TouchableOpacity, ActivityIndicator, ScrollView } from 'react-native';
-import { router, useLocalSearchParams } from 'expo-router';
+import { router, useLocalSearchParams, Stack } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Button } from '../../../src/components';
 import { colors, fonts, fontSizes, spacing, radius, shadows } from '../../../src/theme';
@@ -119,6 +119,7 @@ export default function PagarMultaScreen() {
   if (loading) {
     return (
       <View style={styles.center}>
+        <Stack.Screen options={{ headerShown: true, title: 'Pagar Multa' }} />
         <ActivityIndicator size="large" color={colors.auctionGold} />
       </View>
     );
@@ -127,6 +128,7 @@ export default function PagarMultaScreen() {
   if (!multa) {
     return (
       <View style={styles.center}>
+        <Stack.Screen options={{ headerShown: true, title: 'Pagar Multa' }} />
         <Text style={styles.emptyText}>No se encontró la multa</Text>
       </View>
     );
@@ -134,7 +136,7 @@ export default function PagarMultaScreen() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <Text style={styles.title}>Pagar multa</Text>
+      <Stack.Screen options={{ headerShown: true, title: 'Pagar Multa' }} />
       <Text style={styles.subtitle}>Elegí un medio de pago compatible con la moneda de la multa.</Text>
 
       <View style={[styles.summaryCard, shadows.sm]}>
