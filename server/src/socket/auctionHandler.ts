@@ -26,12 +26,6 @@ function calcularCostoEnvio(importe: number, esInternacional: boolean): number {
 
 // Track: userId -> subastaId (T402: max 1 subasta por usuario)
 const userConnections = new Map<number, number>();
-// Track: subastaId -> current item being auctioned
-const activeItems = new Map<number, number>();
-// Track: itemId -> timer for automatic close from first bid
-const itemCloseTimers = new Map<number, NodeJS.Timeout>();
-// Track: itemId -> timer for auto-buy by company if nobody bids
-const itemNoBidTimers = new Map<number, NodeJS.Timeout>();
 // Track: itemId -> pending payment winner data
 const pendingPayments = new Map<number, {
   subastaId: number;
@@ -47,8 +41,29 @@ const pendingPayments = new Map<number, {
   moneda: string;
 }>();
 
-const LAST_BID_CLOSE_MS = 15_000;
-const NO_BID_AUTO_BUY_MS = 60 * 60 * 1000;
+// Correccion 1: la subasta cierra en una fecha/hora de fin definida por la empresa,
+// NO por inactividad. Todos los items quedan abiertos hasta ese momento; al cerrar,
+// cada item se adjudica a su mejor postor.
+// Track: subastaId -> epoch ms de cierre programado
+const auctionEndAt = new Map<number, number>();
+// Track: subastaId -> timer de cierre programado
+const auctionCloseTimers = new Map<number, NodeJS.Timeout>();
+
+// Referencia al servidor de sockets para poder programar cierres desde fuera del
+// handler (p.ej. cuando el admin crea una subasta).
+let ioRef: Server | null = null;
+
+// setTimeout desborda con delays mayores a ~24.8 dias (2^31 ms) y dispara de
+// inmediato. Como una subasta puede cerrar dentro de varias semanas, encadenamos
+// timers en tramos seguros.
+const MAX_TIMEOUT_MS = 2_147_483_000;
+
+function setLongTimeout(delayMs: number, cb: () => void): NodeJS.Timeout {
+  if (delayMs <= MAX_TIMEOUT_MS) {
+    return setTimeout(cb, Math.max(0, delayMs));
+  }
+  return setTimeout(() => setLongTimeout(delayMs - MAX_TIMEOUT_MS, cb), MAX_TIMEOUT_MS);
+}
 
 // W6: mensajes por codigo de bloqueo de puja. El frontend usa el code para la UI;
 // este texto es el fallback legible.
@@ -61,27 +76,13 @@ export const BID_REASON_MESSAGES: Record<string, string> = {
   PAYMENT_METHOD_UNVERIFIED: 'Tu medio de pago esta pendiente de verificacion por la empresa',
 };
 
-function clearItemTimers(itemId: number) {
-  const closeTimer = itemCloseTimers.get(itemId);
-  if (closeTimer) {
-    clearTimeout(closeTimer);
-    itemCloseTimers.delete(itemId);
-  }
-
-  const noBidTimer = itemNoBidTimers.get(itemId);
-  if (noBidTimer) {
-    clearTimeout(noBidTimer);
-    itemNoBidTimers.delete(itemId);
-  }
-}
-
 function clearAuctionState(subastaId: number) {
-  const currentItem = activeItems.get(subastaId);
-  if (currentItem) {
-    clearItemTimers(currentItem);
+  const timer = auctionCloseTimers.get(subastaId);
+  if (timer) {
+    clearTimeout(timer);
+    auctionCloseTimers.delete(subastaId);
   }
-
-  activeItems.delete(subastaId);
+  auctionEndAt.delete(subastaId);
   for (const [itemId, pending] of pendingPayments.entries()) {
     if (pending.subastaId === subastaId) {
       pendingPayments.delete(itemId);
@@ -89,26 +90,94 @@ function clearAuctionState(subastaId: number) {
   }
 }
 
-function scheduleNoBidAutoBuy(io: Server, subastaId: number, itemId: number) {
-  if (itemNoBidTimers.has(itemId)) return;
-
-  const timer = setTimeout(async () => {
-    try {
-      await finalizeItemForPayment(io, subastaId, itemId);
-    } catch (error) {
-      console.error('Error auto-buying item without bids:', error);
-    } finally {
-      itemNoBidTimers.delete(itemId);
-    }
-  }, NO_BID_AUTO_BUY_MS);
-
-  itemNoBidTimers.set(itemId, timer);
-  io.to(`auction-${subastaId}`).emit('item-no-bid-scheduled', {
-    itemId,
-    closeInMs: NO_BID_AUTO_BUY_MS,
-  });
+/**
+ * Devuelve fecha/hora de fin (epoch ms) de una subasta a partir de fechaFin/horaFin.
+ * null si la subasta no tiene fin definido.
+ */
+async function getAuctionEnd(pool: sql.ConnectionPool, subastaId: number): Promise<number | null> {
+  const r = await pool.request()
+    .input('id', subastaId)
+    .query(`
+      SELECT CONVERT(varchar(10), fechaFin, 23) AS fechaFinStr,
+             CONVERT(varchar(8), horaFin, 108) AS horaFinStr
+      FROM subastas WHERE identificador = @id
+    `);
+  if (r.recordset.length === 0) return null;
+  const { fechaFinStr, horaFinStr } = r.recordset[0];
+  if (!fechaFinStr || !horaFinStr) return null;
+  const ms = new Date(`${fechaFinStr}T${horaFinStr}`).getTime();
+  return Number.isNaN(ms) ? null : ms;
 }
 
+/**
+ * Items del catalogo de una subasta con su mejor oferta actual. Es lo que ve el
+ * usuario al entrar: todos los items abiertos, con quien va ganando y por cuanto.
+ */
+async function getAuctionItems(pool: sql.ConnectionPool, subastaId: number): Promise<any[]> {
+  const items = await pool.request()
+    .input('subastaId', subastaId)
+    .query(`
+      SELECT ic.identificador, ic.precioBase, ic.subastado,
+             pr.descripcionCatalogo
+      FROM itemsCatalogo ic
+      INNER JOIN catalogos c ON c.identificador = ic.catalogo
+      INNER JOIN productos pr ON pr.identificador = ic.producto
+      WHERE c.subasta = @subastaId
+      ORDER BY ic.identificador
+    `);
+
+  const result: any[] = [];
+  for (const it of items.recordset) {
+    const best = await pool.request()
+      .input('item', it.identificador)
+      .query(`
+        SELECT TOP 1 p.importe, pe.nombre AS postorNombre, a.cliente AS postorId
+        FROM pujos p
+        INNER JOIN asistentes a ON a.identificador = p.asistente
+        INNER JOIN clientes c ON c.identificador = a.cliente
+        INNER JOIN personas pe ON pe.identificador = c.identificador
+        WHERE p.item = @item
+        ORDER BY p.importe DESC, p.fechaPuja DESC, p.identificador DESC
+      `);
+    const countRes = await pool.request()
+      .input('item', it.identificador)
+      .query('SELECT COUNT(*) AS count FROM pujos WHERE item = @item');
+
+    result.push({
+      identificador: it.identificador,
+      precioBase: it.precioBase,
+      descripcionCatalogo: it.descripcionCatalogo,
+      subastado: it.subastado,
+      bestBid: best.recordset[0]
+        ? { importe: best.recordset[0].importe, postorNombre: best.recordset[0].postorNombre, postorId: best.recordset[0].postorId }
+        : null,
+      totalBids: countRes.recordset[0].count,
+    });
+  }
+  return result;
+}
+
+async function getCurrentBestBid(pool: any, itemId: number) {
+  const bestBid = await pool.request()
+    .input('item', itemId)
+    .query(`
+      SELECT TOP 1 p.identificador as bidId, p.importe, pe.nombre as postorNombre, a.cliente as postorId
+      FROM pujos p
+      INNER JOIN asistentes a ON a.identificador = p.asistente
+      INNER JOIN clientes c ON c.identificador = a.cliente
+      INNER JOIN personas pe ON pe.identificador = c.identificador
+      WHERE p.item = @item
+      ORDER BY p.importe DESC, p.fechaPuja DESC, p.identificador DESC
+    `);
+
+  return bestBid.recordset[0] || null;
+}
+
+/**
+ * Adjudica un item a su mejor postor (o lo compra la empresa si no hubo pujas).
+ * Crea el pago pendiente y notifica al ganador conectado. Se usa al cerrar la
+ * subasta (un item por vez) y al cancelar un pago (re-adjudica al siguiente).
+ */
 async function finalizeItemForPayment(io: Server, subastaId: number, itemId: number): Promise<{ success: boolean; noBids?: boolean; error?: string }> {
   const pool = await connectDB();
 
@@ -146,8 +215,6 @@ async function finalizeItemForPayment(io: Server, subastaId: number, itemId: num
     `);
 
   if (winner.recordset.length === 0) {
-    clearItemTimers(itemId);
-
     await pool.request()
       .input('item', itemId)
       .query("UPDATE itemsCatalogo SET subastado = 'si' WHERE identificador = @item");
@@ -156,7 +223,6 @@ async function finalizeItemForPayment(io: Server, subastaId: number, itemId: num
     // exige un cliente comprador y la empresa no es un cliente del modelo, por lo que la
     // compra se refleja marcando el item como subastado + evento (limitacion documentada).
     io.to(`auction-${subastaId}`).emit('item-no-bids', { itemId, compraEmpresa: true });
-    await advanceOrCloseAuction(io, subastaId);
     return { success: true, noBids: true };
   }
 
@@ -217,73 +283,113 @@ async function finalizeItemForPayment(io: Server, subastaId: number, itemId: num
     }
   }
 
-  clearItemTimers(itemId);
-
   return { success: true };
 }
 
-async function getCurrentBestBid(pool: any, itemId: number) {
-  const bestBid = await pool.request()
-    .input('item', itemId)
-    .query(`
-      SELECT TOP 1 p.identificador as bidId, p.importe, pe.nombre as postorNombre, a.cliente as postorId
-      FROM pujos p
-      INNER JOIN asistentes a ON a.identificador = p.asistente
-      INNER JOIN clientes c ON c.identificador = a.cliente
-      INNER JOIN personas pe ON pe.identificador = c.identificador
-      WHERE p.item = @item
-      ORDER BY p.importe DESC, p.fechaPuja DESC, p.identificador DESC
-    `);
-
-  return bestBid.recordset[0] || null;
-}
-
-async function closeAuction(io: Server, subastaId: number) {
-  const pool = await connectDB();
-
-  await pool.request()
-    .input('subastaId', subastaId)
-    .query("UPDATE subastas SET estado = 'cerrada' WHERE identificador = @subastaId");
-
-  clearAuctionState(subastaId);
-
-  const sockets = await io.in(`auction-${subastaId}`).fetchSockets();
-  for (const s of sockets) {
-    s.leave(`auction-${subastaId}`);
-    s.emit('auction-closed', { subastaId });
-  }
-}
-
 /**
- * Avanza la subasta al siguiente item sin subastar (REQ-07 / BLOG-04). Solo
- * cierra la subasta completa cuando ya no quedan items pendientes; antes,
- * vender o impagar un item cerraba toda la subasta y se perdian los demas.
+ * Cierre programado de la subasta (Correccion 1). Marca la subasta como cerrada,
+ * adjudica cada item a su mejor postor (o compra de la empresa) y avisa a la sala.
  */
-async function advanceOrCloseAuction(io: Server, subastaId: number): Promise<void> {
+async function closeAuctionAndFinalize(subastaId: number): Promise<void> {
+  const io = ioRef;
+  if (!io) return;
   const pool = await connectDB();
-  const next = await pool.request()
+
+  const subasta = await pool.request()
+    .input('id', subastaId)
+    .query("SELECT estado FROM subastas WHERE identificador = @id");
+  if (subasta.recordset.length === 0) {
+    clearAuctionState(subastaId);
+    return;
+  }
+
+  // Marcar cerrada para que no se acepten mas pujas.
+  await pool.request()
+    .input('id', subastaId)
+    .query("UPDATE subastas SET estado = 'cerrada' WHERE identificador = @id");
+
+  // Adjudicar cada item pendiente a su mejor postor.
+  const items = await pool.request()
     .input('subastaId', subastaId)
     .query(`
-      SELECT TOP 1 ic.identificador
+      SELECT ic.identificador
       FROM itemsCatalogo ic
       INNER JOIN catalogos c ON c.identificador = ic.catalogo
       WHERE c.subasta = @subastaId AND (ic.subastado = 'no' OR ic.subastado IS NULL)
       ORDER BY ic.identificador
     `);
 
-  if (next.recordset.length === 0) {
-    await closeAuction(io, subastaId);
+  for (const it of items.recordset) {
+    try {
+      await finalizeItemForPayment(io, subastaId, Number(it.identificador));
+    } catch (err) {
+      console.error(`Error finalizando item ${it.identificador} al cerrar subasta ${subastaId}:`, err);
+    }
+  }
+
+  const timer = auctionCloseTimers.get(subastaId);
+  if (timer) clearTimeout(timer);
+  auctionCloseTimers.delete(subastaId);
+  auctionEndAt.delete(subastaId);
+
+  io.to(`auction-${subastaId}`).emit('auction-ended', { subastaId });
+}
+
+/**
+ * Programa (o reprograma) el cierre automatico de una subasta. Exportada para que
+ * el admin la invoque al crear la subasta. Si la fecha ya paso, cierra de inmediato.
+ */
+export function scheduleAuctionClose(subastaId: number, finDate: Date | number): void {
+  const finMs = finDate instanceof Date ? finDate.getTime() : finDate;
+  if (!Number.isFinite(finMs)) return;
+
+  auctionEndAt.set(subastaId, finMs);
+
+  const existing = auctionCloseTimers.get(subastaId);
+  if (existing) clearTimeout(existing);
+
+  const delay = finMs - Date.now();
+  if (delay <= 0) {
+    closeAuctionAndFinalize(subastaId).catch((e) => console.error('Error cerrando subasta vencida:', e));
     return;
   }
 
-  const nextItemId = Number(next.recordset[0].identificador);
-  activeItems.set(subastaId, nextItemId);
-  clearItemTimers(nextItemId);
-  io.to(`auction-${subastaId}`).emit('active-item-changed', { itemId: nextItemId });
-  scheduleNoBidAutoBuy(io, subastaId, nextItemId);
+  const timer = setLongTimeout(delay, () => {
+    auctionCloseTimers.delete(subastaId);
+    closeAuctionAndFinalize(subastaId).catch((e) => console.error('Error en cierre programado:', e));
+  });
+  auctionCloseTimers.set(subastaId, timer);
+}
+
+/**
+ * Al iniciar el servidor reprograma los cierres de las subastas abiertas que tengan
+ * fin definido (sobrevive a reinicios). Las ya vencidas se cierran en el acto.
+ */
+export async function scheduleOpenAuctionsFromDB(): Promise<void> {
+  try {
+    const pool = await connectDB();
+    const open = await pool.request().query(`
+      SELECT identificador,
+             CONVERT(varchar(10), fechaFin, 23) AS fechaFinStr,
+             CONVERT(varchar(8), horaFin, 108) AS horaFinStr
+      FROM subastas
+      WHERE estado = 'abierta' AND fechaFin IS NOT NULL AND horaFin IS NOT NULL
+    `);
+    for (const row of open.recordset) {
+      const ms = new Date(`${row.fechaFinStr}T${row.horaFinStr}`).getTime();
+      if (!Number.isNaN(ms)) scheduleAuctionClose(Number(row.identificador), ms);
+    }
+    if (open.recordset.length > 0) {
+      console.log(`[auction] ${open.recordset.length} subasta(s) abierta(s) con cierre programado`);
+    }
+  } catch (err) {
+    console.error('Error reprogramando cierres de subastas:', err);
+  }
 }
 
 export function setupAuctionSocket(io: Server) {
+  ioRef = io;
+
   // Auth middleware for socket
   io.use((socket, next) => {
     const token = socket.handshake.auth.token;
@@ -315,13 +421,22 @@ export function setupAuctionSocket(io: Server) {
 
         const pool = await connectDB();
 
-        // Verify auction exists and is open
+        // La subasta debe existir. Se permite entrar si esta abierta o si el usuario
+        // tiene un pago pendiente en ella (para poder pagar tras el cierre).
         const subasta = await pool.request()
           .input('id', subastaId)
-          .query("SELECT identificador, categoria, estado, moneda FROM subastas WHERE identificador = @id AND estado = 'abierta'");
+          .query("SELECT identificador, categoria, estado, moneda FROM subastas WHERE identificador = @id");
 
         if (subasta.recordset.length === 0) {
-          callback({ success: false, error: 'Subasta no encontrada o cerrada' });
+          callback({ success: false, error: 'Subasta no encontrada' });
+          return;
+        }
+
+        const estadoSubasta = subasta.recordset[0].estado;
+        const tienePendiente = Array.from(pendingPayments.values())
+          .some((p) => p.subastaId === subastaId && p.clienteId === user.id);
+        if (estadoSubasta !== 'abierta' && !tienePendiente) {
+          callback({ success: false, error: 'Subasta cerrada' });
           return;
         }
 
@@ -366,80 +481,23 @@ export function setupAuctionSocket(io: Server) {
         else if (mediosActivos === 0) reasonCode = 'PAYMENT_METHOD_MISSING';
         else if (mediosVerificados === 0) reasonCode = 'PAYMENT_METHOD_UNVERIFIED';
 
-        const canBid = reasonCode === null;
+        // Solo se puede pujar si la subasta sigue abierta.
+        const canBid = reasonCode === null && estadoSubasta === 'abierta';
 
         // Join room
         socket.join(`auction-${subastaId}`);
         userConnections.set(user.id, subastaId);
 
-        // Get current item and best bid
-        let currentItem = activeItems.get(subastaId);
-
-        if (!currentItem) {
-          const firstUnsold = await pool.request()
-            .input('subastaId', subastaId)
-            .query(`
-              SELECT TOP 1 ic.identificador
-              FROM itemsCatalogo ic
-              INNER JOIN catalogos c ON c.identificador = ic.catalogo
-              WHERE c.subasta = @subastaId AND (ic.subastado = 'no' OR ic.subastado IS NULL)
-              ORDER BY ic.identificador
-            `);
-
-          if (firstUnsold.recordset.length > 0) {
-            const firstItemId = Number(firstUnsold.recordset[0].identificador);
-            if (Number.isFinite(firstItemId)) {
-              currentItem = firstItemId;
-              activeItems.set(subastaId, firstItemId);
-              io.to(`auction-${subastaId}`).emit('active-item-changed', { itemId: firstItemId });
-              scheduleNoBidAutoBuy(io, subastaId, firstItemId);
-            }
+        // Asegurar que el cierre este programado (sobrevive a reinicios del server).
+        let finMs = auctionEndAt.get(subastaId) ?? null;
+        if (finMs === null) {
+          finMs = await getAuctionEnd(pool, subastaId);
+          if (finMs !== null && estadoSubasta === 'abierta' && !auctionCloseTimers.has(subastaId)) {
+            scheduleAuctionClose(subastaId, finMs);
           }
         }
 
-        let currentBidData = null;
-
-        if (currentItem) {
-          const bestBid = await pool.request()
-            .input('item', currentItem)
-            .query(`
-              SELECT TOP 1 p.importe, pe.nombre as postorNombre
-              FROM pujos p
-              INNER JOIN asistentes a ON a.identificador = p.asistente
-              INNER JOIN clientes c ON c.identificador = a.cliente
-              INNER JOIN personas pe ON pe.identificador = c.identificador
-              WHERE p.item = @item
-              ORDER BY p.importe DESC
-            `);
-
-          const itemInfo = await pool.request()
-            .input('item', currentItem)
-            .query(`
-              SELECT ic.identificador, ic.precioBase, pr.descripcionCatalogo, s.categoria as subastaCat
-              FROM itemsCatalogo ic
-              INNER JOIN catalogos c ON c.identificador = ic.catalogo
-              INNER JOIN subastas s ON s.identificador = c.subasta
-              INNER JOIN productos pr ON pr.identificador = ic.producto
-              WHERE ic.identificador = @item
-            `);
-
-          if (itemInfo.recordset.length > 0) {
-            currentBidData = {
-              item: itemInfo.recordset[0],
-              bestBid: bestBid.recordset[0] || null,
-              totalBids: 0,
-            };
-
-            const bidCount = await pool.request()
-              .input('item', currentItem)
-              .query('SELECT COUNT(*) as count FROM pujos WHERE item = @item');
-            currentBidData.totalBids = bidCount.recordset[0].count;
-
-            if (bidCount.recordset[0].count === 0 && !itemNoBidTimers.has(currentItem)) {
-              scheduleNoBidAutoBuy(io, subastaId, currentItem);
-            }
-          }
-        }
+        const items = await getAuctionItems(pool, subastaId);
 
         callback({
           success: true,
@@ -447,8 +505,11 @@ export function setupAuctionSocket(io: Server) {
             canBid,
             reasonCode,
             reason: reasonCode ? BID_REASON_MESSAGES[reasonCode] : null,
-            currentBid: currentBidData,
             moneda: subasta.recordset[0].moneda,
+            categoria: subasta.recordset[0].categoria,
+            estado: estadoSubasta,
+            fin: finMs !== null ? new Date(finMs).toISOString() : null,
+            items,
           },
         });
 
@@ -479,6 +540,14 @@ export function setupAuctionSocket(io: Server) {
         // Verify user is in this auction
         if (userConnections.get(user.id) !== subastaId) {
           callback({ success: false, error: 'No estas conectado a esta subasta' });
+          return;
+        }
+
+        // Correccion 1: la subasta sigue abierta hasta su fin programado. Rechazar si
+        // ya paso el horario de cierre aunque el timer todavia no haya disparado.
+        const finMs = auctionEndAt.get(subastaId) ?? await getAuctionEnd(pool, subastaId);
+        if (finMs !== null && Date.now() >= finMs) {
+          callback({ success: false, error: 'La subasta ya finalizo' });
           return;
         }
 
@@ -680,7 +749,8 @@ export function setupAuctionSocket(io: Server) {
           throw txError;
         }
 
-        // T406: Broadcast a todos los conectados (fuera de la transaccion)
+        // T406: Broadcast a todos los conectados (fuera de la transaccion). El itemId
+        // permite que el cliente actualice el "quien va ganando" del item correcto.
         io.to(`auction-${subastaId}`).emit('new-bid', {
           bidId,
           itemId,
@@ -690,80 +760,11 @@ export function setupAuctionSocket(io: Server) {
           timestamp: new Date().toISOString(),
         });
 
-        // Reiniciar timers: el ultimo postor gana si expira el tiempo.
-        const noBidTimer = itemNoBidTimers.get(itemId);
-        if (noBidTimer) {
-          clearTimeout(noBidTimer);
-          itemNoBidTimers.delete(itemId);
-        }
-
-        const existingTimer = itemCloseTimers.get(itemId);
-        if (existingTimer) {
-          clearTimeout(existingTimer);
-          itemCloseTimers.delete(itemId);
-        }
-
-        const timer = setTimeout(async () => {
-          try {
-            await finalizeItemForPayment(io, subastaId, itemId);
-          } catch (err) {
-            console.error('Error auto-closing item:', err);
-          } finally {
-            itemCloseTimers.delete(itemId);
-          }
-        }, LAST_BID_CLOSE_MS);
-        itemCloseTimers.set(itemId, timer);
-        io.to(`auction-${subastaId}`).emit('item-close-scheduled', {
-          itemId,
-          closeInMs: LAST_BID_CLOSE_MS,
-        });
-
         callback({ success: true, data: { bidId } });
 
       } catch (error) {
         console.error('Error place-bid:', error);
         callback({ success: false, error: 'Error al registrar la puja' });
-      }
-    });
-
-    // T407: Close item auction (emitted by auctioneer/admin)
-    socket.on('close-item', async (data: { subastaId: number; itemId: number }, callback: Function) => {
-      try {
-        const { subastaId, itemId } = data;
-        const pool = await connectDB();
-
-        // Security: verify user is the auctioneer for this auction
-        const authCheck = await pool.request()
-          .input('subastaId', subastaId)
-          .input('userId', user.id)
-          .query(`
-            SELECT s.identificador FROM subastas s
-            INNER JOIN subastadores sub ON sub.identificador = s.subastador
-            WHERE s.identificador = @subastaId AND sub.identificador = @userId
-          `);
-
-        if (authCheck.recordset.length === 0) {
-          callback({ success: false, error: 'Solo el subastador puede cerrar items' });
-          return;
-        }
-
-        const activeTimer = itemCloseTimers.get(itemId);
-        if (activeTimer) {
-          clearTimeout(activeTimer);
-          itemCloseTimers.delete(itemId);
-        }
-
-        const result = await finalizeItemForPayment(io, subastaId, itemId);
-        if (!result.success) {
-          callback({ success: false, error: result.error || 'No se pudo cerrar el item' });
-          return;
-        }
-
-        callback({ success: true, data: { cerrado: true, pendientePago: !result.noBids } });
-
-      } catch (error) {
-        console.error('Error close-item:', error);
-        callback({ success: false, error: 'Error al cerrar item' });
       }
     });
 
@@ -859,10 +860,6 @@ export function setupAuctionSocket(io: Server) {
             throw txErr;
           }
 
-          if (activeItems.get(pending.subastaId) === pending.itemId) {
-            activeItems.delete(pending.subastaId);
-          }
-          clearItemTimers(pending.itemId);
           pendingPayments.delete(data.itemId);
 
           io.to(`auction-${pending.subastaId}`).emit('item-payment-defaulted', {
@@ -871,9 +868,6 @@ export function setupAuctionSocket(io: Server) {
             multa: importeMulta,
             fechaLimite,
           });
-
-          // REQ-07/BLOG-04: avanzar al siguiente item; no cerrar toda la subasta.
-          await advanceOrCloseAuction(io, pending.subastaId);
 
           // A5-03: codigo estable para que el cliente no dependa de parsear el texto.
           callback({ success: false, error: mensajeMulta, code: 'MULTA_APLICADA' });
@@ -963,9 +957,6 @@ export function setupAuctionSocket(io: Server) {
         // TPO §53: la actividad (ganar) puede mejorar la categoria del cliente. No bloquea el pago.
         recalcularCategoria(user.id).catch((e) => console.error('Error recalculando categoria:', e));
 
-        // REQ-07/BLOG-04: continuar con el siguiente item; cerrar solo si no quedan.
-        await advanceOrCloseAuction(io, pending.subastaId);
-
         pendingPayments.delete(data.itemId);
         callback({ success: true, data: { totalPagado: total, modoEntrega, costoEnvio: costoEnvioFinal } });
       } catch (error) {
@@ -974,7 +965,8 @@ export function setupAuctionSocket(io: Server) {
       }
     });
 
-    // Winner cancels payment: remove winning bid and reopen item with previous best bid.
+    // Winner cancels payment: remove their winning bid and re-award the item to the
+    // next best bidder (or the company if no other bids remain).
     socket.on('cancel-payment', async (data: { itemId: number }, callback: Function) => {
       try {
         const pending = pendingPayments.get(data.itemId);
@@ -989,102 +981,38 @@ export function setupAuctionSocket(io: Server) {
         }
 
         const pool = await connectDB();
+        const subastaId = pending.subastaId;
+        const itemId = pending.itemId;
 
+        // Quitar la puja ganadora y liberar el pago pendiente.
         await pool.request()
           .input('pujoId', pending.pujoId)
           .query('DELETE FROM pujos WHERE identificador = @pujoId');
-
         pendingPayments.delete(data.itemId);
 
-        const reopenedBid = await getCurrentBestBid(pool, pending.itemId);
+        // Avisar al canceller para que cierre su modal.
+        const reopenedBid = await getCurrentBestBid(pool, itemId);
+        io.to(`auction-${subastaId}`).emit('item-payment-cancelled', {
+          itemId,
+          bidId: pending.pujoId,
+          bestBid: reopenedBid ? Number(reopenedBid.importe) : null,
+          bestBidder: reopenedBid?.postorNombre || '',
+        });
 
-        clearItemTimers(pending.itemId);
-        activeItems.set(pending.subastaId, pending.itemId);
+        // Re-adjudicar al siguiente mejor postor (o compra de la empresa si no hay).
+        await finalizeItemForPayment(io, subastaId, itemId);
 
-        if (reopenedBid) {
-          // Quedaba al menos una oferta previa: reanudar el cierre por inactividad
-          // desde esa oferta.
-          const reopenedState = {
-            itemId: pending.itemId,
-            bestBid: Number(reopenedBid.importe || 0),
-            bestBidder: reopenedBid.postorNombre,
-            bestBidderId: reopenedBid.postorId,
-            bidId: reopenedBid.bidId,
-          };
-          const timer = setTimeout(async () => {
-            try {
-              await finalizeItemForPayment(io, pending.subastaId, pending.itemId);
-            } catch (err) {
-              console.error('Error re-closing item after payment cancel:', err);
-            } finally {
-              itemCloseTimers.delete(pending.itemId);
-            }
-          }, LAST_BID_CLOSE_MS);
-          itemCloseTimers.set(pending.itemId, timer);
-
-          io.to(`auction-${pending.subastaId}`).emit('item-payment-cancelled', {
-            ...reopenedState,
-            closeInMs: LAST_BID_CLOSE_MS,
-          });
-          io.to(`auction-${pending.subastaId}`).emit('item-close-scheduled', {
-            itemId: pending.itemId,
-            closeInMs: LAST_BID_CLOSE_MS,
-          });
-          callback({ success: true, data: reopenedState });
-        } else {
-          // BLOG-14: no quedan pujas previas. Volver al precio base y reprogramar la
-          // compra automatica de la empresa (no un cierre inmediato por debajo del minimo).
-          const itemInfo = await pool.request()
-            .input('item', pending.itemId)
-            .query('SELECT precioBase FROM itemsCatalogo WHERE identificador = @item');
-          const precioBase = itemInfo.recordset.length > 0
-            ? parseFloat(itemInfo.recordset[0].precioBase)
-            : 0;
-          const reopenedState = {
-            itemId: pending.itemId,
-            bestBid: precioBase,
-            bestBidder: '',
-            bestBidderId: null,
-            bidId: null,
-          };
-          scheduleNoBidAutoBuy(io, pending.subastaId, pending.itemId);
-          io.to(`auction-${pending.subastaId}`).emit('item-payment-cancelled', {
-            ...reopenedState,
-            closeInMs: NO_BID_AUTO_BUY_MS,
-          });
-          callback({ success: true, data: reopenedState });
-        }
+        callback({
+          success: true,
+          data: {
+            itemId,
+            bestBid: reopenedBid ? Number(reopenedBid.importe) : null,
+            bestBidder: reopenedBid?.postorNombre || '',
+          },
+        });
       } catch (error) {
         console.error('Error cancel-payment:', error);
         callback({ success: false, error: 'No se pudo cancelar el pago' });
-      }
-    });
-
-    // Set active item for auction (admin/auctioneer only)
-    socket.on('set-active-item', async (data: { subastaId: number; itemId: number }, callback?: Function) => {
-      try {
-        const pool = await connectDB();
-        const authCheck = await pool.request()
-          .input('subastaId', data.subastaId)
-          .input('userId', user.id)
-          .query(`
-            SELECT s.identificador FROM subastas s
-            INNER JOIN subastadores sub ON sub.identificador = s.subastador
-            WHERE s.identificador = @subastaId AND sub.identificador = @userId
-          `);
-
-        if (authCheck.recordset.length === 0) {
-          callback?.({ success: false, error: 'Solo el subastador puede cambiar items' });
-          return;
-        }
-
-        activeItems.set(data.subastaId, data.itemId);
-        io.to(`auction-${data.subastaId}`).emit('active-item-changed', { itemId: data.itemId });
-        scheduleNoBidAutoBuy(io, data.subastaId, data.itemId);
-        callback?.({ success: true });
-      } catch (error) {
-        console.error('Error set-active-item:', error);
-        callback?.({ success: false, error: 'Error interno' });
       }
     });
 

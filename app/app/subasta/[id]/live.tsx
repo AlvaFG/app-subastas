@@ -1,48 +1,33 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import {
-  View, Text, StyleSheet, FlatList, TextInput, KeyboardAvoidingView, Platform, ScrollView, Image,
+  View, Text, StyleSheet, FlatList, TextInput, KeyboardAvoidingView, Platform, Pressable,
 } from 'react-native';
 import { useLocalSearchParams, Stack } from 'expo-router';
 import Animated, {
   useSharedValue, useAnimatedStyle, withTiming, withSequence,
 } from 'react-native-reanimated';
-import { Button, Badge, Modal } from '../../../src/components';
-import { CategoryName } from '../../../src/components/Badge';
-import { colors, fonts, fontSizes, spacing, radius, shadows, duration } from '../../../src/theme';
+import { Button, Modal } from '../../../src/components';
+import { colors, fonts, fontSizes, spacing, radius, shadows } from '../../../src/theme';
 import { connectSocket, getSocket, disconnectSocket } from '../../../src/services/socket';
 import { useAuthStore } from '../../../src/store/authStore';
-import api from '../../../src/services/api';
 import { getApiErrorMessage } from '../../../src/utils/apiError';
 import { notify, confirmAction } from '../../../src/utils/notify';
 import type { MedioPago } from '../../../src/types';
 
-interface Bid {
-  bidId: number;
-  itemId: number;
-  importe: number;
-  postorNombre: string;
-  timestamp: string;
-}
-
-interface CurrentItem {
+// Item de la subasta con su mejor oferta actual (quien va ganando y por cuanto).
+interface AuctionItem {
   identificador: number;
   precioBase: number;
   descripcionCatalogo: string;
-  subastaCat?: string;
-  articulos?: {
-    identificador: number;
-    orden: number;
-    descripcion: string;
-    fotos: string[];
-  }[];
+  subastado: string;
+  bestBid: { importe: number; postorNombre: string; postorId?: number } | null;
+  totalBids: number;
 }
 
-// Medio de pago ofrecido al ganador (incluye monto disponible calculado por el backend).
 interface MedioPagoOption extends MedioPago {
   montoDisponible: number;
 }
 
-// Item ganado: payload del evento 'you-won'.
 interface WonItem {
   itemId: number;
   importe: number;
@@ -52,7 +37,6 @@ interface WonItem {
   medios?: MedioPagoOption[];
 }
 
-// Ack generico de los callbacks de socket.
 interface SocketAck<T = unknown> {
   success: boolean;
   data?: T;
@@ -60,8 +44,6 @@ interface SocketAck<T = unknown> {
   code?: string;
 }
 
-// W6: UI por codigo de bloqueo de puja. El color comunica la severidad
-// (rojo = bloqueo duro, gris = condicion del usuario por resolver).
 const REASON_UI: Record<string, { title: string; color: string }> = {
   BLOCKED_INACTIVITY: { title: 'Cuenta bloqueada', color: colors.alertEmber },
   UNPAID_PENALTY: { title: 'Multa impaga', color: colors.alertEmber },
@@ -71,40 +53,27 @@ const REASON_UI: Record<string, { title: string; color: string }> = {
   PAYMENT_METHOD_UNVERIFIED: { title: 'Medio sin verificar', color: colors.auctionGold },
 };
 
-// Respuesta del ack de 'join-auction'.
 interface JoinAuctionData {
   canBid: boolean;
   reason: string | null;
   reasonCode?: string | null;
   moneda?: string;
-  currentBid?: {
-    item: CurrentItem;
-    bestBid?: { importe: number; postorNombre: string } | null;
-  } | null;
+  categoria?: string;
+  estado?: string;
+  fin?: string | null;
+  items?: AuctionItem[];
 }
 
-// Payloads de eventos del servidor.
-interface ItemSoldPayload {
-  ganadorNombre: string;
-  importe: number;
-}
-
-interface ItemPaymentCancelledPayload {
+interface NewBidPayload {
   bidId: number;
-  bestBid?: number | null;
-  bestBidder?: string | null;
-  closeInMs?: number | null;
+  itemId: number;
+  importe: number;
+  postorId: number;
+  postorNombre: string;
 }
 
-interface CancelPaymentData {
-  bestBid?: number | null;
-  bestBidder?: string | null;
-}
-
-// Estado de la conexion del socket en vivo.
 type ConnectionStatus = 'connecting' | 'connected' | 'reconnecting' | 'disconnected';
 
-// Tiempo maximo de espera del ack de una puja antes de liberar el boton.
 const BID_ACK_TIMEOUT_MS = 10000;
 
 export default function LiveAuctionScreen() {
@@ -116,45 +85,81 @@ export default function LiveAuctionScreen() {
   const [canBid, setCanBid] = useState(false);
   const [bidReason, setBidReason] = useState<string | null>(null);
   const [bidReasonCode, setBidReasonCode] = useState<string | null>(null);
-  const [currentItem, setCurrentItem] = useState<CurrentItem | null>(null);
-  const [bestBid, setBestBid] = useState<number>(0);
-  const [bestBidder, setBestBidder] = useState<string>('');
-  const [bids, setBids] = useState<Bid[]>([]);
+  const [items, setItems] = useState<AuctionItem[]>([]);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
   const [bidInput, setBidInput] = useState('');
   const [isBidding, setIsBidding] = useState(false);
   const [moneda, setMoneda] = useState('ARS');
+  const [categoria, setCategoria] = useState('comun');
+  const [finMs, setFinMs] = useState<number | null>(null);
+  const [now, setNow] = useState<number>(Date.now());
+  const [ended, setEnded] = useState(false);
+
   const [showPaymentModal, setShowPaymentModal] = useState(false);
   const [wonItem, setWonItem] = useState<WonItem | null>(null);
   const [selectedMedioPagoId, setSelectedMedioPagoId] = useState<number | null>(null);
   const [modoEntrega, setModoEntrega] = useState<'envio' | 'retiro'>('envio');
-  const [closingInMs, setClosingInMs] = useState<number | null>(null);
-  const [currentCategory, setCurrentCategory] = useState<string>('comun');
   const [cancellingPayment, setCancellingPayment] = useState(false);
-  const [minBid, setMinBid] = useState<number | null>(null);
-  const [maxBid, setMaxBid] = useState<number | null>(null);
 
-  // Timeout del ack de la puja en curso (A5-07): libera el boton si no llega confirmacion.
   const bidTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
   const connected = connectionStatus === 'connected';
 
-  // Animation for price pulse
   const priceScale = useSharedValue(1);
-  const priceAnimStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: priceScale.value }],
-  }));
-
+  const priceAnimStyle = useAnimatedStyle(() => ({ transform: [{ scale: priceScale.value }] }));
   const pulseBid = useCallback(() => {
-    priceScale.value = withSequence(
-      withTiming(1.08, { duration: 200 }),
-      withTiming(1, { duration: 300 }),
-    );
+    priceScale.value = withSequence(withTiming(1.08, { duration: 200 }), withTiming(1, { duration: 300 }));
+  }, []);
+
+  const formatPrice = (price: number) =>
+    `${moneda === 'USD' ? 'US$' : '$'} ${Number(price || 0).toLocaleString('es-AR', { minimumFractionDigits: 2 })}`;
+
+  const selectedItem = items.find((it) => it.identificador === selectedId) || null;
+  const isHighCategory = categoria === 'oro' || categoria === 'platino';
+
+  // Tick del countdown cada segundo.
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  const remaining = finMs != null ? finMs - now : null;
+
+  const formatRemaining = (ms: number): string => {
+    if (ms <= 0) return 'Finalizada';
+    const s = Math.floor(ms / 1000);
+    const d = Math.floor(s / 86400);
+    const h = Math.floor((s % 86400) / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    if (d > 0) return `${d}d ${h}h ${m}m`;
+    if (h > 0) return `${h}h ${m}m ${sec}s`;
+    return `${m}m ${sec}s`;
+  };
+
+  const finLabel = finMs != null ? new Date(finMs).toLocaleString('es-AR') : 'Sin cierre programado';
+
+  // Min/max de puja para el item seleccionado (mismo criterio que el backend).
+  const base = Number(selectedItem?.precioBase || 0);
+  const currentBest = selectedItem?.bestBid ? Number(selectedItem.bestBid.importe) : base;
+  const minBid = selectedItem ? currentBest + base * 0.01 : null;
+  const maxBid = selectedItem && !isHighCategory ? currentBest + base * 0.20 : null;
+
+  const applyNewBid = useCallback((payload: NewBidPayload) => {
+    setItems((prev) => prev.map((it) =>
+      it.identificador === payload.itemId
+        ? { ...it, bestBid: { importe: payload.importe, postorNombre: payload.postorNombre, postorId: payload.postorId }, totalBids: it.totalBids + 1 }
+        : it,
+    ));
+    pulseBid();
+  }, [pulseBid]);
+
+  const markItemSold = useCallback((itemId: number) => {
+    setItems((prev) => prev.map((it) => it.identificador === itemId ? { ...it, subastado: 'si' } : it));
   }, []);
 
   useEffect(() => {
     let mounted = true;
 
-    // A5-09: aplica el ack de join-auction, tolerando un ack ausente/undefined.
     const applyJoinAck = (response?: SocketAck<JoinAuctionData>) => {
       if (!mounted) return;
       if (!response) {
@@ -168,17 +173,12 @@ export default function LiveAuctionScreen() {
         setBidReason(data.reason);
         setBidReasonCode(data.reasonCode ?? null);
         setMoneda(data.moneda || 'ARS');
-        if (data.currentBid) {
-          const item = data.currentBid.item;
-          setCurrentItem(item);
-          setCurrentCategory(item.subastaCat || 'comun');
-          if (data.currentBid.bestBid != null) {
-            setBestBid(data.currentBid.bestBid.importe);
-            setBestBidder(data.currentBid.bestBid.postorNombre);
-          } else {
-            setBestBid(item.precioBase);
-          }
-        }
+        setCategoria(data.categoria || 'comun');
+        setEnded(data.estado === 'cerrada');
+        setFinMs(data.fin ? new Date(data.fin).getTime() : null);
+        const list = data.items || [];
+        setItems(list);
+        setSelectedId((prev) => prev ?? (list.find((i) => i.subastado !== 'si')?.identificador ?? list[0]?.identificador ?? null));
       } else {
         notify('Error', response.error || 'No se pudo unir a la subasta');
       }
@@ -193,22 +193,14 @@ export default function LiveAuctionScreen() {
       try {
         const socket = await connectSocket();
         if (!mounted) return;
-
         setConnectionStatus(socket.connected ? 'connected' : 'connecting');
 
-        // A5-01 + A5-08: estado de conexion del socket.
         socket.on('connect', () => {
           if (!mounted) return;
           setConnectionStatus('connected');
-          // Re-sincroniza el estado de la subasta tras reconectar.
           joinAuction(socket);
         });
-
-        socket.on('disconnect', () => {
-          if (!mounted) return;
-          setConnectionStatus('reconnecting');
-        });
-
+        socket.on('disconnect', () => { if (mounted) setConnectionStatus('reconnecting'); });
         socket.on('connect_error', () => {
           if (!mounted) return;
           setConnectionStatus((prev) => (prev === 'connected' ? 'reconnecting' : 'disconnected'));
@@ -216,51 +208,29 @@ export default function LiveAuctionScreen() {
 
         joinAuction(socket);
 
-        // Listen for new bids
-        socket.on('new-bid', (bid: Bid) => {
+        socket.on('new-bid', (bid: NewBidPayload) => { if (mounted) applyNewBid(bid); });
+
+        socket.on('item-closed', (data: { itemId: number; ganadorNombre?: string; importe?: number }) => {
           if (!mounted) return;
-          setBids((prev) => [bid, ...prev]);
-          setBestBid(bid.importe);
-          setBestBidder(bid.postorNombre);
-          pulseBid();
+          markItemSold(data.itemId);
         });
 
-        // Listen for item changes
-        socket.on('active-item-changed', async (data: { itemId: number }) => {
+        socket.on('item-sold', (data: { itemId: number; ganadorNombre: string; importe: number }) => {
           if (!mounted) return;
-          try {
-            const res = await api.get(`/subastas/items/${data.itemId}`);
-            const newItem: CurrentItem = res.data.data;
-            setCurrentItem(newItem);
-            setCurrentCategory(newItem.subastaCat || 'comun');
-            setBids([]);
-            setBestBid(newItem.precioBase);
-            setBestBidder('');
-            setClosingInMs(null);
-          } catch (err) {
-            console.error('Error fetching new item:', err);
-            setBids([]);
-          }
-        });
-
-        socket.on('item-close-scheduled', (data: { itemId: number; closeInMs: number }) => {
-          if (!mounted) return;
-          setClosingInMs(data.closeInMs);
-        });
-
-        // Item sold
-        socket.on('item-sold', (data: ItemSoldPayload) => {
-          if (!mounted) return;
+          markItemSold(data.itemId);
           notify('VENDIDO', `${data.ganadorNombre} gano por ${formatPrice(data.importe)}`);
         });
 
-        // T606: No bids — company bought
-        socket.on('item-no-bids', () => {
+        socket.on('item-no-bids', (data: { itemId: number }) => {
           if (!mounted) return;
-          notify('Sin pujas', 'La empresa adquirio el item al precio base.');
+          markItemSold(data.itemId);
         });
 
-        // You won!
+        socket.on('item-payment-defaulted', (data: { itemId: number }) => {
+          if (!mounted) return;
+          markItemSold(data.itemId);
+        });
+
         socket.on('you-won', (data: WonItem) => {
           if (!mounted) return;
           setWonItem(data);
@@ -269,31 +239,33 @@ export default function LiveAuctionScreen() {
           setShowPaymentModal(true);
         });
 
-        socket.on('item-payment-cancelled', (data: ItemPaymentCancelledPayload) => {
+        socket.on('item-payment-cancelled', (data: { itemId: number; bestBid?: number | null; bestBidder?: string | null }) => {
           if (!mounted) return;
           setShowPaymentModal(false);
           setWonItem(null);
           setSelectedMedioPagoId(null);
-          setBids((prev) => prev.filter((bid) => bid.bidId !== data.bidId));
-          setBestBid(Number(data.bestBid != null ? data.bestBid : (currentItem?.precioBase ?? 0)));
-          setBestBidder(data.bestBidder || '');
-          setClosingInMs(data.closeInMs ?? null);
+          setItems((prev) => prev.map((it) => it.identificador === data.itemId
+            ? { ...it, bestBid: data.bestBid != null ? { importe: data.bestBid, postorNombre: data.bestBidder || '' } : null }
+            : it));
+        });
+
+        socket.on('auction-ended', () => {
+          if (!mounted) return;
+          setEnded(true);
+          setCanBid(false);
+          notify('Subasta finalizada', 'La subasta llego a su horario de cierre.');
         });
 
         socket.on('auction-closed', () => {
           if (!mounted) return;
+          setEnded(true);
           setCanBid(false);
-          setBidReason('La subasta ya fue cerrada');
-          setBidReasonCode(null);
-          setClosingInMs(null);
-          notify('Subasta cerrada', 'La subasta fue cerrada luego del pago final.');
         });
 
       } catch (error: unknown) {
         if (!mounted) return;
         setConnectionStatus('disconnected');
-        const msg = getApiErrorMessage(error, 'No se pudo conectar a la subasta');
-        notify('Error', msg);
+        notify('Error', getApiErrorMessage(error, 'No se pudo conectar a la subasta'));
       }
     })();
 
@@ -302,110 +274,42 @@ export default function LiveAuctionScreen() {
       const socket = getSocket();
       if (socket) {
         socket.emit('leave-auction', subastaId);
-        // A5-05: remover TODOS los listeners para evitar fugas y duplicados.
-        socket.off('connect');
-        socket.off('disconnect');
-        socket.off('connect_error');
-        socket.off('new-bid');
-        socket.off('active-item-changed');
-        socket.off('item-close-scheduled');
-        socket.off('item-sold');
-        socket.off('item-no-bids');
-        socket.off('you-won');
-        socket.off('item-payment-cancelled');
-        socket.off('auction-closed');
+        ['connect', 'disconnect', 'connect_error', 'new-bid', 'item-closed', 'item-sold',
+          'item-no-bids', 'item-payment-defaulted', 'you-won', 'item-payment-cancelled',
+          'auction-ended', 'auction-closed'].forEach((ev) => socket.off(ev));
       }
       disconnectSocket();
-      // A5-07: limpiar el timeout pendiente de la puja para evitar fugas.
       if (bidTimeoutRef.current) {
         clearTimeout(bidTimeoutRef.current);
         bidTimeoutRef.current = null;
       }
     };
-  }, [subastaId]);
-
-  useEffect(() => {
-    if (closingInMs == null) return;
-    const timer = setInterval(() => {
-      setClosingInMs((prev) => {
-        if (prev == null) return null;
-        if (prev <= 1000) return null;
-        return prev - 1000;
-      });
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [closingInMs]);
-
-  // Recalculate min/max bids whenever bestBid, item or category change
-  useEffect(() => {
-    if (!currentItem) {
-      setMinBid(null);
-      setMaxBid(null);
-      return;
-    }
-    const base = Number(currentItem.precioBase || 0);
-    const isHighCategory = currentCategory === 'oro' || currentCategory === 'platino';
-    const min = Number((bestBid || 0) + (base * 0.01));
-    const max = isHighCategory ? null : Number((bestBid || 0) + (base * 0.20));
-    setMinBid(min);
-    setMaxBid(max);
-  }, [bestBid, currentItem, currentCategory]);
-
-  const formatPrice = (price: number) =>
-    `${moneda === 'USD' ? 'US$' : '$'} ${price.toLocaleString('es-AR', { minimumFractionDigits: 2 })}`;
+  }, [subastaId, applyNewBid, markItemSold]);
 
   const handleBid = () => {
-    // A5-07 + REQ-10: no permitir una nueva puja hasta confirmar la anterior.
-    if (isBidding) return;
-
+    if (isBidding || !selectedItem) return;
     const importe = parseFloat(bidInput);
     if (isNaN(importe) || importe <= 0) {
       notify('Error', 'Ingrese un monto valido');
       return;
     }
-
-    if (!currentItem) {
-      notify('Error', 'No hay item activo');
+    if (importe <= currentBest) {
+      notify('Puja rechazada', `La puja debe ser mayor a ${currentBest}`);
       return;
     }
-
-    const base = Number(currentItem.precioBase || 0);
-    const isHighCategory = currentCategory === 'oro' || currentCategory === 'platino';
-    if (importe <= bestBid) {
-      notify('Puja rechazada', `La puja debe ser mayor a ${bestBid}`);
-      return;
-    }
-    if (!isHighCategory) {
-      const minValido = bestBid + (base * 0.01);
-      const maxValido = bestBid + (base * 0.20);
-      if (importe < minValido) {
-        notify('Puja rechazada', `Puja minima: ${minValido.toFixed(2)}`);
-        return;
-      }
-      if (importe > maxValido) {
-        notify('Puja rechazada', `Puja maxima: ${maxValido.toFixed(2)}`);
-        return;
-      }
+    if (!isHighCategory && minBid != null && maxBid != null) {
+      if (importe < minBid) { notify('Puja rechazada', `Puja minima: ${minBid.toFixed(2)}`); return; }
+      if (importe > maxBid) { notify('Puja rechazada', `Puja maxima: ${maxBid.toFixed(2)}`); return; }
     }
 
     const socket = getSocket();
-    if (!socket) {
-      notify('Error', 'Sin conexion con la subasta');
-      return;
-    }
+    if (!socket) { notify('Error', 'Sin conexion con la subasta'); return; }
 
-    // Bloquea el boton hasta recibir el ack (o hasta el timeout).
     setIsBidding(true);
-
     let acked = false;
     const clearBidTimeout = () => {
-      if (bidTimeoutRef.current) {
-        clearTimeout(bidTimeoutRef.current);
-        bidTimeoutRef.current = null;
-      }
+      if (bidTimeoutRef.current) { clearTimeout(bidTimeoutRef.current); bidTimeoutRef.current = null; }
     };
-
-    // A5-07: si no llega el ack en N ms, liberar el boton y avisar.
     bidTimeoutRef.current = setTimeout(() => {
       if (acked) return;
       acked = true;
@@ -413,52 +317,31 @@ export default function LiveAuctionScreen() {
       notify('Sin confirmacion', 'No se recibio confirmacion de la puja. Reintente.');
     }, BID_ACK_TIMEOUT_MS);
 
-    socket.emit(
-      'place-bid',
-      { subastaId, itemId: currentItem.identificador, importe },
-      (response?: SocketAck<unknown>) => {
-        if (acked) return;
-        acked = true;
-        clearBidTimeout();
-        setIsBidding(false);
-        // A5-09: ack ausente -> error en vez de crash.
-        if (!response) {
-          notify('Error', 'No se recibio respuesta del servidor.');
-          return;
-        }
-        if (response.success) {
-          setBidInput('');
-        } else {
-          notify('Puja rechazada', response.error || 'No se pudo registrar la puja');
-        }
-      },
-    );
+    socket.emit('place-bid', { subastaId, itemId: selectedItem.identificador, importe }, (response?: SocketAck<unknown>) => {
+      if (acked) return;
+      acked = true;
+      clearBidTimeout();
+      setIsBidding(false);
+      if (!response) { notify('Error', 'No se recibio respuesta del servidor.'); return; }
+      if (response.success) setBidInput('');
+      else notify('Puja rechazada', response.error || 'No se pudo registrar la puja');
+    });
   };
 
   const confirmPayment = () => {
-    if (!wonItem?.itemId || !selectedMedioPagoId) {
-      notify('Error', 'Seleccione un medio de pago');
-      return;
-    }
+    if (!wonItem?.itemId || !selectedMedioPagoId) { notify('Error', 'Seleccione un medio de pago'); return; }
     const socket = getSocket();
     if (!socket) return;
-    // §125: retiro personal => sin costo de envio (y sin seguro). El total se recalcula.
     const costoEnvioEfectivo = modoEntrega === 'retiro' ? 0 : (wonItem.costoEnvio ?? 0);
     const total = wonItem.importe + wonItem.comision + costoEnvioEfectivo;
     socket.emit('confirm-payment', { itemId: wonItem.itemId, medioPagoId: selectedMedioPagoId, modoEntrega }, (response?: SocketAck<unknown>) => {
-      // A5-09: ack ausente -> error en vez de crash.
-      if (!response) {
-        notify('Error', 'No se recibio respuesta del servidor.');
-        return;
-      }
+      if (!response) { notify('Error', 'No se recibio respuesta del servidor.'); return; }
       if (response.success) {
         notify('Pago confirmado', `Total pagado: ${formatPrice(total)}`);
         setShowPaymentModal(false);
         setWonItem(null);
         return;
       }
-      // A5-03 + A5-11: detectar la multa por el code del backend, no por substring,
-      // y mostrar UN solo Alert (no ademas 'Pago rechazado').
       if (response.code === 'MULTA_APLICADA') {
         setShowPaymentModal(false);
         setWonItem(null);
@@ -470,27 +353,16 @@ export default function LiveAuctionScreen() {
   };
 
   const performCancelPayment = () => {
-    if (!wonItem?.itemId) {
-      setShowPaymentModal(false);
-      return;
-    }
+    if (!wonItem?.itemId) { setShowPaymentModal(false); return; }
     const socket = getSocket();
-    if (!socket) {
-      setShowPaymentModal(false);
-      return;
-    }
-
+    if (!socket) { setShowPaymentModal(false); return; }
     setCancellingPayment(true);
-    socket.emit('cancel-payment', { itemId: wonItem.itemId }, (response?: SocketAck<CancelPaymentData>) => {
+    socket.emit('cancel-payment', { itemId: wonItem.itemId }, (response?: SocketAck<unknown>) => {
       setCancellingPayment(false);
       if (response?.success) {
         setShowPaymentModal(false);
         setWonItem(null);
         setSelectedMedioPagoId(null);
-        // A5-04: tratar 0 como valor valido (no como ausencia).
-        const nuevoBestBid = response.data?.bestBid;
-        setBestBid(Number(nuevoBestBid != null ? nuevoBestBid : (currentItem?.precioBase ?? 0)));
-        setBestBidder(response.data?.bestBidder || '');
       } else {
         notify('Error', response?.error || 'No se pudo cancelar el pago');
       }
@@ -498,28 +370,16 @@ export default function LiveAuctionScreen() {
   };
 
   const cancelPayment = () => {
-    if (!wonItem?.itemId) {
-      setShowPaymentModal(false);
-      return;
-    }
-
+    if (!wonItem?.itemId) { setShowPaymentModal(false); return; }
     confirmAction(
       'Cancelar compra',
-      'Estas seguro que desea cancelar la compra y volver a la ultima oferta?',
+      'Estas seguro que desea cancelar la compra? El item se readjudicara al siguiente postor.',
       performCancelPayment,
       'Cancelar compra',
       'Seguir pagando',
     );
   };
 
-  const renderBid = ({ item }: { item: Bid }) => (
-    <View style={styles.bidRow}>
-      <Text style={styles.bidName}>{item.postorNombre}</Text>
-      <Text style={styles.bidAmount}>{formatPrice(item.importe)}</Text>
-    </View>
-  );
-
-  // A5-01 + A5-08: descripcion clara del estado de conexion para la UI.
   const connectionLabel: Record<ConnectionStatus, string> = {
     connecting: 'Conectando a la subasta...',
     connected: 'Conectado en vivo',
@@ -527,17 +387,36 @@ export default function LiveAuctionScreen() {
     disconnected: 'Sin conexion con la subasta',
   };
   const connectionDotStyle =
-    connectionStatus === 'connected'
-      ? styles.dotConnected
-      : connectionStatus === 'reconnecting' || connectionStatus === 'connecting'
-        ? styles.dotReconnecting
+    connectionStatus === 'connected' ? styles.dotConnected
+      : connectionStatus === 'reconnecting' || connectionStatus === 'connecting' ? styles.dotReconnecting
         : styles.dotDisconnected;
 
+  const renderItem = ({ item }: { item: AuctionItem }) => {
+    const selected = item.identificador === selectedId;
+    const vasGanando = item.bestBid?.postorId != null && item.bestBid.postorId === user?.id;
+    return (
+      <Pressable onPress={() => setSelectedId(item.identificador)} style={[styles.itemCard, selected && styles.itemCardSelected, item.subastado === 'si' && styles.itemCardSold]}>
+        <View style={styles.itemHeader}>
+          <Text style={styles.itemTitle} numberOfLines={1}>{item.descripcionCatalogo}</Text>
+          {item.subastado === 'si' && <Text style={styles.soldTag}>VENDIDO</Text>}
+        </View>
+        <Text style={styles.itemBase}>Base: {formatPrice(item.precioBase)}</Text>
+        {item.bestBid ? (
+          <View style={styles.winnerRow}>
+            <Text style={styles.winnerLabel}>Va ganando:</Text>
+            <Text style={styles.winnerName}>{vasGanando ? 'Vos' : item.bestBid.postorNombre}</Text>
+            <Text style={styles.winnerAmount}>{formatPrice(item.bestBid.importe)}</Text>
+          </View>
+        ) : (
+          <Text style={styles.noBidsItem}>Sin ofertas aun</Text>
+        )}
+        <Text style={styles.bidCount}>{item.totalBids} puja(s)</Text>
+      </Pressable>
+    );
+  };
+
   return (
-    <KeyboardAvoidingView
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-    >
+    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
       <Stack.Screen options={{ headerShown: false }} />
 
       {/* Header */}
@@ -549,145 +428,79 @@ export default function LiveAuctionScreen() {
         <Text style={styles.headerMoneda}>{moneda}</Text>
       </View>
 
-      {/* A5-01 + A5-08: estado de conexion del socket con mensaje claro */}
       {!connected && (
-        <View
-          style={[
-            styles.connectionBanner,
-            connectionStatus === 'disconnected' ? styles.connectionBannerError : styles.connectionBannerWarn,
-          ]}
-        >
+        <View style={[styles.connectionBanner, connectionStatus === 'disconnected' ? styles.connectionBannerError : styles.connectionBannerWarn]}>
           <Text style={styles.connectionBannerText}>{connectionLabel[connectionStatus]}</Text>
         </View>
       )}
 
-      {/* Current item */}
-      {currentItem ? (
-        <View style={styles.itemSection}>
-          <Text style={styles.itemTitle}>{currentItem.descripcionCatalogo}</Text>
-          <Text style={styles.basePrice}>Base: {formatPrice(currentItem.precioBase)}</Text>
+      {/* Countdown al cierre de la subasta */}
+      <Animated.View style={[styles.finBanner, shadows.glow, priceAnimStyle]}>
+        <Text style={styles.finLabel}>{ended ? 'Subasta finalizada' : 'Cierra en'}</Text>
+        {!ended && remaining != null && (
+          <Text style={styles.finCountdown}>{formatRemaining(remaining)}</Text>
+        )}
+        <Text style={styles.finDate}>{ended ? finLabel : `Fin: ${finLabel}`}</Text>
+      </Animated.View>
 
-          {currentItem.articulos && currentItem.articulos.length > 0 && (
-            <View style={styles.articleSection}>
-              <Text style={styles.articleSectionTitle}>Articulos del lote</Text>
-              {currentItem.articulos.map((articulo) => (
-                <View key={articulo.identificador} style={styles.articleCard}>
-                  <Text style={styles.articleTitle}>Articulo {articulo.orden}</Text>
-                  <Text style={styles.articleDescription}>{articulo.descripcion}</Text>
-                  {articulo.fotos.length > 0 && (
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.articlePhotos}>
-                      {articulo.fotos.map((foto, index) => (
-                        <Image key={`${articulo.identificador}-${index}`} source={{ uri: foto }} style={styles.articleImage} resizeMode="cover" />
-                      ))}
-                    </ScrollView>
-                  )}
-                </View>
-              ))}
-            </View>
-          )}
+      {/* Lista de items, cada uno con quien va ganando y por cuanto */}
+      <FlatList
+        data={items}
+        keyExtractor={(it) => String(it.identificador)}
+        renderItem={renderItem}
+        style={styles.list}
+        contentContainerStyle={styles.listContent}
+        ListEmptyComponent={<Text style={styles.empty}>Esta subasta no tiene items.</Text>}
+      />
 
-          <Animated.View style={[styles.priceContainer, shadows.glow, priceAnimStyle]}>
-            <Text style={styles.priceLabel}>Mejor Oferta</Text>
-            <Text style={styles.currentPrice}>{formatPrice(bestBid)}</Text>
-            {bestBidder && <Text style={styles.bidderName}>{bestBidder}</Text>}
-            {closingInMs != null && <Text style={styles.countdown}>Cierre en: {Math.ceil(closingInMs / 1000)}s</Text>}
-            {currentItem && (
-              <View style={styles.minMaxContainer}>
-                <Text style={styles.minMaxLabel}>Puja mínima: {formatPrice(minBid ?? 0)}</Text>
-                <Text style={styles.minMaxLabel}>Puja máxima: {maxBid != null ? formatPrice(maxBid) : 'Sin tope'}</Text>
-              </View>
-            )}
-          </Animated.View>
-        </View>
-      ) : (
-        <View style={styles.waiting}>
-          <Text style={styles.waitingText}>Esperando inicio...</Text>
-        </View>
-      )}
-
-      {/* Bid history */}
-      <View style={styles.bidsSection}>
-        <Text style={styles.bidsTitle}>Pujas ({bids.length})</Text>
-        <FlatList
-          data={bids}
-          keyExtractor={(item) => item.bidId.toString()}
-          renderItem={renderBid}
-          style={styles.bidsList}
-          ListEmptyComponent={
-            <Text style={styles.noBids}>Sin pujas aun</Text>
-          }
-        />
-      </View>
-
-      {/* Bid input */}
-      {canBid && currentItem ? (
+      {/* Barra de puja para el item seleccionado */}
+      {canBid && selectedItem && selectedItem.subastado !== 'si' && !ended ? (
         <View style={styles.bidBar}>
-          <TextInput
-            style={styles.bidInput}
-            placeholder="Monto a pujar..."
-            placeholderTextColor={colors.textMuted}
-            value={bidInput}
-            onChangeText={setBidInput}
-            keyboardType="decimal-pad"
-          />
-          <Button
-            title="Pujar"
-            onPress={handleBid}
-            loading={isBidding}
-            disabled={!connected}
-            size="md"
-            style={styles.bidButton}
-          />
+          <View style={styles.bidBarTop}>
+            <Text style={styles.bidBarItem} numberOfLines={1}>Pujando: {selectedItem.descripcionCatalogo}</Text>
+            <Text style={styles.bidBarLimits}>
+              Min {formatPrice(minBid ?? 0)}{maxBid != null ? ` · Max ${formatPrice(maxBid)}` : ' · Sin tope'}
+            </Text>
+          </View>
+          <View style={styles.bidBarRow}>
+            <TextInput
+              style={styles.bidInput}
+              placeholder="Monto a pujar..."
+              placeholderTextColor={colors.textMuted}
+              value={bidInput}
+              onChangeText={setBidInput}
+              keyboardType="decimal-pad"
+            />
+            <Button title="Pujar" onPress={handleBid} loading={isBidding} disabled={!connected} size="md" style={styles.bidButton} />
+          </View>
         </View>
-      ) : bidReason ? (
+      ) : bidReason && !ended ? (
         <View style={styles.bidBarDisabled}>
           {bidReasonCode && REASON_UI[bidReasonCode] ? (
             <View style={styles.reasonRow}>
               <View style={[styles.reasonDot, { backgroundColor: REASON_UI[bidReasonCode].color }]} />
-              <Text style={[styles.reasonTitle, { color: REASON_UI[bidReasonCode].color }]}>
-                {REASON_UI[bidReasonCode].title}
-              </Text>
+              <Text style={[styles.reasonTitle, { color: REASON_UI[bidReasonCode].color }]}>{REASON_UI[bidReasonCode].title}</Text>
             </View>
           ) : null}
           <Text style={styles.bidBarDisabledText}>{bidReason}</Text>
         </View>
       ) : null}
 
-      {/* T408: Payment modal after winning */}
-      <Modal
-        visible={showPaymentModal}
-        onClose={cancelPayment}
-        title="Felicitaciones!"
-        variant="bottom"
-      >
+      {/* Payment modal after winning */}
+      <Modal visible={showPaymentModal} onClose={cancelPayment} title="Felicitaciones!" variant="bottom">
         <Text style={styles.wonText}>Ganaste la pieza!</Text>
         {wonItem && (
           <>
-            <View style={styles.wonDetail}>
-              <Text style={styles.wonLabel}>Importe pujado</Text>
-              <Text style={styles.wonValue}>{formatPrice(wonItem.importe)}</Text>
-            </View>
-            <View style={styles.wonDetail}>
-              <Text style={styles.wonLabel}>Comision</Text>
-              <Text style={styles.wonValue}>{formatPrice(wonItem.comision)}</Text>
-            </View>
-            {/* §125: modo de entrega — el retiro personal anula envio y seguro */}
+            <View style={styles.wonDetail}><Text style={styles.wonLabel}>Importe pujado</Text><Text style={styles.wonValue}>{formatPrice(wonItem.importe)}</Text></View>
+            <View style={styles.wonDetail}><Text style={styles.wonLabel}>Comision</Text><Text style={styles.wonValue}>{formatPrice(wonItem.comision)}</Text></View>
             <Text style={[styles.wonLabel, { marginTop: spacing.sm }]}>Entrega</Text>
             <View style={styles.entregaRow}>
               <Button title="Envio (con seguro)" variant={modoEntrega === 'envio' ? 'primary' : 'outline'} size="sm" onPress={() => setModoEntrega('envio')} style={styles.flexBtn} />
               <Button title="Retiro (pierde seguro)" variant={modoEntrega === 'retiro' ? 'primary' : 'outline'} size="sm" onPress={() => setModoEntrega('retiro')} style={styles.flexBtn} />
             </View>
-            <View style={styles.wonDetail}>
-              <Text style={styles.wonLabel}>Costo de envio</Text>
-              <Text style={styles.wonValue}>{formatPrice(modoEntrega === 'retiro' ? 0 : (wonItem.costoEnvio || 0))}</Text>
-            </View>
-            {modoEntrega === 'retiro' ? (
-              <Text style={styles.seguroWarn}>Retiro personal: el bien pierde la cobertura del seguro.</Text>
-            ) : null}
-            <View style={styles.wonDetail}>
-              <Text style={styles.wonLabel}>Total</Text>
-              <Text style={styles.wonValue}>{formatPrice(wonItem.importe + wonItem.comision + (modoEntrega === 'retiro' ? 0 : (wonItem.costoEnvio || 0)))}</Text>
-            </View>
+            <View style={styles.wonDetail}><Text style={styles.wonLabel}>Costo de envio</Text><Text style={styles.wonValue}>{formatPrice(modoEntrega === 'retiro' ? 0 : (wonItem.costoEnvio || 0))}</Text></View>
+            {modoEntrega === 'retiro' ? <Text style={styles.seguroWarn}>Retiro personal: el bien pierde la cobertura del seguro.</Text> : null}
+            <View style={styles.wonDetail}><Text style={styles.wonLabel}>Total</Text><Text style={styles.wonValue}>{formatPrice(wonItem.importe + wonItem.comision + (modoEntrega === 'retiro' ? 0 : (wonItem.costoEnvio || 0)))}</Text></View>
 
             <Text style={[styles.wonLabel, { marginTop: spacing.md }]}>Seleccione medio de pago</Text>
             {Array.isArray(wonItem.medios) && wonItem.medios.map((m: MedioPagoOption) => (
@@ -700,13 +513,7 @@ export default function LiveAuctionScreen() {
                 style={{ marginTop: spacing.xs }}
               />
             ))}
-            <Button
-              title="Confirmar Pago"
-              onPress={confirmPayment}
-              size="lg"
-              disabled={cancellingPayment}
-              style={{ marginTop: spacing.md }}
-            />
+            <Button title="Confirmar Pago" onPress={confirmPayment} size="lg" disabled={cancellingPayment} style={{ marginTop: spacing.md }} />
           </>
         )}
       </Modal>
@@ -730,39 +537,34 @@ const styles = StyleSheet.create({
   connectionBannerError: { backgroundColor: colors.alertEmber },
   connectionBannerText: { fontFamily: fonts.bodyMedium, fontSize: fontSizes.sm, color: colors.ivory },
 
-  itemSection: { paddingHorizontal: spacing.lg, paddingBottom: spacing.lg },
-  itemTitle: { fontFamily: fonts.headingSemibold, fontSize: fontSizes.xl, color: colors.ivory },
-  basePrice: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.textMuted, marginTop: spacing.xs },
-  articleSection: { marginTop: spacing.md },
-  articleSectionTitle: { fontFamily: fonts.bodyMedium, fontSize: fontSizes.sm, color: colors.textMuted, marginBottom: spacing.sm },
-  articleCard: { backgroundColor: colors.graphite, borderRadius: radius.md, padding: spacing.md, marginBottom: spacing.sm },
-  articleTitle: { fontFamily: fonts.bodySemibold, fontSize: fontSizes.base, color: colors.ivory },
-  articleDescription: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.textMuted, marginTop: spacing.xs, lineHeight: 21 },
-  articlePhotos: { marginTop: spacing.sm },
-  articleImage: { width: 120, height: 120, borderRadius: radius.md, marginRight: spacing.sm },
+  finBanner: { backgroundColor: colors.graphite, borderRadius: radius.lg, padding: spacing.lg, marginHorizontal: spacing.lg, marginBottom: spacing.md, alignItems: 'center' },
+  finLabel: { fontFamily: fonts.bodyMedium, fontSize: fontSizes.sm, color: colors.textMuted },
+  finCountdown: { fontFamily: fonts.display, fontSize: fontSizes['3xl'], color: colors.auctionGold, marginTop: spacing.xs },
+  finDate: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.textMuted, marginTop: spacing.xs },
 
-  priceContainer: { backgroundColor: colors.graphite, borderRadius: radius.lg, padding: spacing.lg, marginTop: spacing.md, alignItems: 'center' },
-  priceLabel: { fontFamily: fonts.bodyMedium, fontSize: fontSizes.sm, color: colors.textMuted },
-  currentPrice: { fontFamily: fonts.display, fontSize: fontSizes.hero, color: colors.auctionGold, marginTop: spacing.xs },
-  bidderName: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.steelBlue, marginTop: spacing.xs },
-  countdown: { fontFamily: fonts.bodySemibold, fontSize: fontSizes.sm, color: colors.alertEmber, marginTop: spacing.xs },
+  list: { flex: 1 },
+  listContent: { paddingHorizontal: spacing.lg, paddingBottom: spacing.lg, gap: spacing.sm },
+  empty: { fontFamily: fonts.body, fontSize: fontSizes.base, color: colors.textMuted, textAlign: 'center', marginTop: spacing.xl },
 
-  minMaxContainer: { flexDirection: 'column', alignItems: 'center', marginTop: spacing.sm },
-  minMaxLabel: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.textMuted, marginTop: spacing.xs, textAlign: 'center' },
+  itemCard: { backgroundColor: colors.graphite, borderRadius: radius.md, padding: spacing.md, borderWidth: 1.5, borderColor: 'transparent' },
+  itemCardSelected: { borderColor: colors.auctionGold },
+  itemCardSold: { opacity: 0.55 },
+  itemHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  itemTitle: { fontFamily: fonts.headingSemibold, fontSize: fontSizes.base, color: colors.ivory, flex: 1 },
+  soldTag: { fontFamily: fonts.bodySemibold, fontSize: fontSizes.xs, color: colors.alertEmber, marginLeft: spacing.sm },
+  itemBase: { fontFamily: fonts.body, fontSize: fontSizes.xs, color: colors.textMuted, marginTop: spacing.xs },
+  winnerRow: { flexDirection: 'row', alignItems: 'baseline', gap: spacing.xs, marginTop: spacing.xs },
+  winnerLabel: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.textMuted },
+  winnerName: { fontFamily: fonts.bodySemibold, fontSize: fontSizes.sm, color: colors.steelBlue },
+  winnerAmount: { fontFamily: fonts.display, fontSize: fontSizes.lg, color: colors.auctionGold, marginLeft: 'auto' },
+  noBidsItem: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.textMuted, marginTop: spacing.xs },
+  bidCount: { fontFamily: fonts.body, fontSize: fontSizes.xs, color: colors.textMuted, marginTop: spacing.xs },
 
-  waiting: { flex: 1, justifyContent: 'center', alignItems: 'center' },
-  waitingText: { fontFamily: fonts.body, fontSize: fontSizes.lg, color: colors.textMuted },
-
-  bidsSection: { flex: 1, paddingHorizontal: spacing.lg },
-  bidsTitle: { fontFamily: fonts.headingSemibold, fontSize: fontSizes.base, color: colors.ivory, marginBottom: spacing.sm },
-  bidsList: { flex: 1 },
-  noBids: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.textMuted, textAlign: 'center', marginTop: spacing.lg },
-
-  bidRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: spacing.sm, borderBottomWidth: 1, borderBottomColor: colors.borderDark },
-  bidName: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.textMuted },
-  bidAmount: { fontFamily: fonts.bodySemibold, fontSize: fontSizes.sm, color: colors.auctionGold },
-
-  bidBar: { flexDirection: 'row', padding: spacing.md, gap: spacing.sm, borderTopWidth: 1, borderTopColor: colors.borderDark },
+  bidBar: { padding: spacing.md, borderTopWidth: 1, borderTopColor: colors.borderDark, gap: spacing.sm },
+  bidBarTop: { gap: 2 },
+  bidBarItem: { fontFamily: fonts.bodySemibold, fontSize: fontSizes.sm, color: colors.ivory },
+  bidBarLimits: { fontFamily: fonts.body, fontSize: fontSizes.xs, color: colors.textMuted },
+  bidBarRow: { flexDirection: 'row', gap: spacing.sm },
   bidInput: { flex: 1, height: 48, backgroundColor: colors.graphite, borderRadius: radius.md, paddingHorizontal: spacing.md, fontFamily: fonts.body, fontSize: fontSizes.base, color: colors.ivory },
   bidButton: { width: 100 },
 

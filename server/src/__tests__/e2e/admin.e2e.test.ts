@@ -14,6 +14,8 @@ jest.mock('../../models/db', () => ({
 
 jest.mock('../../socket/auctionHandler', () => ({
   setupAuctionSocket: jest.fn(),
+  scheduleAuctionClose: jest.fn(),
+  scheduleOpenAuctionsFromDB: jest.fn().mockResolvedValue(undefined),
 }));
 
 // Los mails no deben tocar SMTP en los tests.
@@ -186,6 +188,56 @@ describe('Admin layer E2E', () => {
         .send({ cliente: 42, subasta: 1, item: 7, importeOriginal: 5000 });
       expect(res.status).toBe(201);
       expect(res.body.data.importeMulta).toBe(500);
+    });
+  });
+
+  // ─── Armado de subastas (Correccion 2) ───
+  describe('GET /api/admin/productos-disponibles', () => {
+    it('lista productos disponibles no colocados en una subasta', async () => {
+      mockQuery.mockResolvedValueOnce({
+        recordset: [
+          { identificador: 800, descripcionCatalogo: 'Reloj', duenioNombre: 'Ana', valorBase: 1000, moneda: 'ARS' },
+        ],
+      });
+      const res = await request(app)
+        .get('/api/admin/productos-disponibles')
+        .set('Authorization', `Bearer ${adminToken}`);
+      expect(res.status).toBe(200);
+      expect(res.body.data).toHaveLength(1);
+      expect(res.body.data[0].identificador).toBe(800);
+    });
+
+    it('403 con token de cliente', async () => {
+      const res = await request(app)
+        .get('/api/admin/productos-disponibles')
+        .set('Authorization', `Bearer ${clientToken}`);
+      expect(res.status).toBe(403);
+    });
+  });
+
+  describe('POST /api/admin/subastas', () => {
+    it('400 sin productos seleccionados', async () => {
+      const res = await request(app)
+        .post('/api/admin/subastas')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ fechaFin: '2030-01-01', horaFin: '15:00', categoria: 'comun', productos: [] });
+      expect(res.status).toBe(400);
+    });
+
+    it('400 sin fecha de fin', async () => {
+      const res = await request(app)
+        .post('/api/admin/subastas')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ horaFin: '15:00', categoria: 'comun', productos: [800] });
+      expect(res.status).toBe(400);
+    });
+
+    it('400 con categoria invalida', async () => {
+      const res = await request(app)
+        .post('/api/admin/subastas')
+        .set('Authorization', `Bearer ${adminToken}`)
+        .send({ fechaFin: '2030-01-01', horaFin: '15:00', categoria: 'vip', productos: [800] });
+      expect(res.status).toBe(400);
     });
   });
 

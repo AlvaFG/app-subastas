@@ -1,10 +1,12 @@
 import { Response } from 'express';
 import crypto from 'crypto';
+import sql from 'mssql';
 import { AuthRequest } from '../middleware/auth';
 import { connectDB } from '../models/db';
 import { CATEGORY_ORDER } from '../utils/category';
 import { getWebUrl } from '../config/env';
 import { sendAdmissionEmail, sendRejectionEmail } from '../services/email';
+import { scheduleAuctionClose } from '../socket/auctionHandler';
 
 // Ventana de validez del token de activacion enviado en el mail de admision.
 const ACTIVACION_TOKEN_TTL_DIAS = 7;
@@ -461,6 +463,233 @@ export async function crearMultaAdmin(req: AuthRequest, res: Response): Promise<
     res.status(201).json({ success: true, data: { importeMulta, fechaLimite, moneda: monedaFinal } });
   } catch (error) {
     console.error('Error crearMultaAdmin:', error);
+    res.status(500).json({ success: false, error: 'Error interno del servidor' });
+  }
+}
+
+// ─── Armado de subastas: el admin elige productos disponibles (Correccion 2) ───
+
+function normalizeHora(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const v = raw.trim();
+  if (/^\d{2}:\d{2}:\d{2}$/.test(v)) return v;
+  if (/^\d{2}:\d{2}$/.test(v)) return `${v}:00`;
+  return null;
+}
+
+// GET /admin/productos-disponibles
+// Productos cuyo dueño-vendedor ya acordo condiciones (solicitud aceptada -> producto
+// creado y disponible) y que todavia NO fueron colocados en ninguna subasta. Esta es
+// la lista que el admin usa para ARMAR una subasta.
+export async function listProductosDisponibles(_req: AuthRequest, res: Response): Promise<void> {
+  try {
+    const pool = await connectDB();
+    const result = await pool.request().query(`
+      SELECT pr.identificador, pr.descripcionCatalogo, pr.descripcionCompleta, pr.duenio,
+             per.nombre AS duenioNombre, per.apellido AS duenioApellido,
+             pr.esObraDisenador, pr.nombreArtistaDisenador,
+             s.identificador AS solicitudId, s.valorBase, s.comisionPropuesta, s.moneda
+      FROM productos pr
+      LEFT JOIN solicitudesVenta s ON s.productoId = pr.identificador
+      LEFT JOIN personas per ON per.identificador = pr.duenio
+      WHERE pr.disponible = 'si'
+        AND NOT EXISTS (SELECT 1 FROM itemsCatalogo ic WHERE ic.producto = pr.identificador)
+      ORDER BY pr.identificador DESC
+    `);
+
+    res.json({ success: true, data: result.recordset });
+  } catch (error) {
+    console.error('Error listProductosDisponibles:', error);
+    res.status(500).json({ success: false, error: 'Error interno del servidor' });
+  }
+}
+
+// GET /admin/subastas — listado para la vista administrativa.
+export async function listSubastasAdmin(_req: AuthRequest, res: Response): Promise<void> {
+  try {
+    const pool = await connectDB();
+    const result = await pool.request().query(`
+      SELECT s.identificador, s.fecha, s.hora, s.fechaFin, s.horaFin, s.estado,
+             s.categoria, s.moneda, s.ubicacion,
+             (SELECT COUNT(*) FROM itemsCatalogo ic
+                INNER JOIN catalogos c ON c.identificador = ic.catalogo
+              WHERE c.subasta = s.identificador) AS cantidadItems
+      FROM subastas s
+      ORDER BY s.identificador DESC
+    `);
+    res.json({ success: true, data: result.recordset });
+  } catch (error) {
+    console.error('Error listSubastasAdmin:', error);
+    res.status(500).json({ success: false, error: 'Error interno del servidor' });
+  }
+}
+
+// POST /admin/subastas
+//   { fecha?, hora?, fechaFin, horaFin, categoria, moneda, ubicacion?, productos: number[] }
+// El admin arma una subasta eligiendo 1+ productos disponibles. La subasta abre de
+// inmediato (estado 'abierta') y cierra en fechaFin/horaFin (Correccion 1).
+export async function crearSubastaAdmin(req: AuthRequest, res: Response): Promise<void> {
+  try {
+    const { fecha, hora, fechaFin, horaFin, categoria, moneda, ubicacion, productos } = req.body;
+
+    if (!Array.isArray(productos) || productos.length === 0) {
+      res.status(400).json({ success: false, error: 'Debe seleccionar al menos un producto' });
+      return;
+    }
+    const productIds = productos.map((p: any) => Number(p)).filter((n) => Number.isInteger(n) && n > 0);
+    if (productIds.length === 0) {
+      res.status(400).json({ success: false, error: 'Lista de productos invalida' });
+      return;
+    }
+
+    if (!CATEGORY_ORDER.includes(categoria)) {
+      res.status(400).json({ success: false, error: 'Categoria invalida' });
+      return;
+    }
+    const monedaFinal = moneda === 'USD' ? 'USD' : 'ARS';
+
+    // Fin obligatorio. Inicio opcional: por defecto la subasta abre hoy.
+    const horaFinNorm = normalizeHora(horaFin);
+    if (!fechaFin || !horaFinNorm) {
+      res.status(400).json({ success: false, error: 'Debe indicar fecha y hora de fin (HH:MM)' });
+      return;
+    }
+    const finDate = new Date(`${fechaFin}T${horaFinNorm}`);
+    if (Number.isNaN(finDate.getTime())) {
+      res.status(400).json({ success: false, error: 'Fecha/hora de fin invalida' });
+      return;
+    }
+    if (finDate.getTime() <= Date.now()) {
+      res.status(400).json({ success: false, error: 'La fecha/hora de fin debe ser futura' });
+      return;
+    }
+
+    const hoy = new Date();
+    const fechaInicio = typeof fecha === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(fecha)
+      ? fecha
+      : hoy.toISOString().split('T')[0];
+    const horaInicio = normalizeHora(hora) || `${String(hoy.getHours()).padStart(2, '0')}:${String(hoy.getMinutes()).padStart(2, '0')}:00`;
+
+    const pool = await connectDB();
+
+    // Validar productos: disponibles, no colocados aun, con valorBase definido y de la
+    // misma moneda que la subasta (TPO: la subasta no puede ser bimonetaria).
+    const placeholders = productIds.map((_, i) => `@p${i}`).join(',');
+    const reqCheck = pool.request();
+    productIds.forEach((id, i) => reqCheck.input(`p${i}`, id));
+    const disponibles = await reqCheck.query(`
+      SELECT pr.identificador, s.valorBase, s.comisionPropuesta, s.moneda
+      FROM productos pr
+      LEFT JOIN solicitudesVenta s ON s.productoId = pr.identificador
+      WHERE pr.identificador IN (${placeholders})
+        AND pr.disponible = 'si'
+        AND NOT EXISTS (SELECT 1 FROM itemsCatalogo ic WHERE ic.producto = pr.identificador)
+    `);
+
+    if (disponibles.recordset.length !== productIds.length) {
+      res.status(400).json({
+        success: false,
+        error: 'Uno o mas productos no estan disponibles o ya fueron incluidos en una subasta',
+      });
+      return;
+    }
+
+    for (const p of disponibles.recordset) {
+      if (!Number.isFinite(Number(p.valorBase)) || Number(p.valorBase) <= 0) {
+        res.status(400).json({ success: false, error: `El producto ${p.identificador} no tiene precio base definido` });
+        return;
+      }
+      const monedaProd = p.moneda === 'USD' ? 'USD' : 'ARS';
+      if (monedaProd !== monedaFinal) {
+        res.status(400).json({
+          success: false,
+          error: `El producto ${p.identificador} es en ${monedaProd}; la subasta es en ${monedaFinal}. Una subasta no puede ser bimonetaria.`,
+        });
+        return;
+      }
+    }
+
+    // Responsable del catalogo: el empleado admin autenticado. Defensivo: si su id no
+    // existe en empleados, usar el primer empleado disponible.
+    let responsable = req.user!.id;
+    const empCheck = await pool.request()
+      .input('id', responsable)
+      .query('SELECT identificador FROM empleados WHERE identificador = @id');
+    if (empCheck.recordset.length === 0) {
+      const anyEmp = await pool.request().query('SELECT TOP 1 identificador FROM empleados ORDER BY identificador');
+      if (anyEmp.recordset.length === 0) {
+        res.status(400).json({ success: false, error: 'No hay empleados configurados en el sistema' });
+        return;
+      }
+      responsable = anyEmp.recordset[0].identificador;
+    }
+
+    const tx = new sql.Transaction(pool);
+    await tx.begin();
+    let subastaId: number;
+    let catalogoId: number;
+    try {
+      const subastaResult = await new sql.Request(tx)
+        .input('fecha', fechaInicio)
+        .input('hora', horaInicio)
+        .input('fechaFin', fechaFin)
+        .input('horaFin', horaFinNorm)
+        .input('estado', 'abierta')
+        .input('ubicacion', typeof ubicacion === 'string' && ubicacion.trim() ? ubicacion.trim() : 'Centro de Remates')
+        .input('tieneDeposito', 'si')
+        .input('seguridadPropia', 'si')
+        .input('categoria', categoria)
+        .input('moneda', monedaFinal)
+        .query(`
+          INSERT INTO subastas (fecha, hora, fechaFin, horaFin, estado, ubicacion, tieneDeposito, seguridadPropia, categoria, moneda)
+          OUTPUT INSERTED.identificador
+          VALUES (@fecha, @hora, @fechaFin, @horaFin, @estado, @ubicacion, @tieneDeposito, @seguridadPropia, @categoria, @moneda)
+        `);
+      subastaId = subastaResult.recordset[0].identificador;
+
+      const catalogoResult = await new sql.Request(tx)
+        .input('subasta', subastaId)
+        .input('descripcion', 'Catalogo de subasta')
+        .input('responsable', responsable)
+        .query(`
+          INSERT INTO catalogos (subasta, descripcion, responsable)
+          OUTPUT INSERTED.identificador
+          VALUES (@subasta, @descripcion, @responsable)
+        `);
+      catalogoId = catalogoResult.recordset[0].identificador;
+
+      for (const p of disponibles.recordset) {
+        const precioBase = Number(p.valorBase);
+        const comision = Number.isFinite(Number(p.comisionPropuesta)) && Number(p.comisionPropuesta) > 0
+          ? Number(p.comisionPropuesta)
+          : +(precioBase * 0.10).toFixed(2);
+        await new sql.Request(tx)
+          .input('catalogo', catalogoId)
+          .input('producto', p.identificador)
+          .input('precioBase', precioBase)
+          .input('comision', comision)
+          .input('subastado', 'no')
+          .query(`
+            INSERT INTO itemsCatalogo (catalogo, producto, precioBase, comision, subastado)
+            VALUES (@catalogo, @producto, @precioBase, @comision, @subastado)
+          `);
+      }
+
+      await tx.commit();
+    } catch (txErr) {
+      try { await tx.rollback(); } catch { /* ya revertida */ }
+      throw txErr;
+    }
+
+    // Programar el cierre automatico de la subasta al llegar fechaFin/horaFin.
+    scheduleAuctionClose(subastaId, finDate);
+
+    res.status(201).json({
+      success: true,
+      data: { identificador: subastaId, items: disponibles.recordset.length, fin: finDate.toISOString() },
+    });
+  } catch (error) {
+    console.error('Error crearSubastaAdmin:', error);
     res.status(500).json({ success: false, error: 'Error interno del servidor' });
   }
 }

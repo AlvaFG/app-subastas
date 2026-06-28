@@ -22,6 +22,7 @@ export default function AdminDashboard() {
         <Button title="Clientes (admitir / categoria)" size="lg" onPress={() => router.push('/(admin)/clientes')} style={styles.btn} />
         <Button title="Verificar medios de pago" size="lg" onPress={() => router.push('/(admin)/medios')} style={styles.btn} />
         <Button title="Solicitudes de venta" size="lg" onPress={() => router.push('/(admin)/solicitudes')} style={styles.btn} />
+        <Button title="Armar subasta (productos disponibles)" size="lg" onPress={() => router.push('/(admin)/subastas')} style={styles.btn} />
         <Button title="Aplicar multa" variant="secondary" size="lg" onPress={() => router.push('/(admin)/multas')} style={styles.btn} />
       </View>
 

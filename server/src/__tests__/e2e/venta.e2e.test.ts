@@ -238,14 +238,13 @@ describe('Venta (flujo vendedor) E2E', () => {
       expect(res.body.error).toMatch(/cuenta a la vista/i);
     });
 
-    it('acepta condiciones con cuenta declarada -> 200 y genera la subasta', async () => {
+    it('acepta condiciones con cuenta declarada -> 200 y deja el producto disponible (sin crear subasta)', async () => {
       routeDb([
         { match: /FROM solicitudesVenta/, result: rs([solicitudAceptada]) },
         { match: /COUNT\(\*\) as count FROM cuentasAVista/, result: rs([{ count: 1 }]) },
         { match: /FROM duenios/, result: rs([{ identificador: 42 }]) },
         { match: /FROM solicitudArticulos/, result: rs([]) },
         { match: /FROM solicitudFotos/, result: rs([]) },
-        { match: /FROM catalogos/, result: rs([]) },
       ]);
 
       const res = await request(app)
@@ -256,11 +255,13 @@ describe('Venta (flujo vendedor) E2E', () => {
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.data.mensaje).toMatch(/Acepto/i);
-      // Se debe haber creado el producto, la subasta y el catalogo.
+      // Correccion 2: se crea el producto (queda disponible) y se vincula a la
+      // solicitud, pero NO se crea la subasta automaticamente: eso lo hace el admin.
       const inserted = mockQuery.mock.calls.map((c) => c[0]).join('\n');
       expect(inserted).toMatch(/INSERT INTO productos/);
-      expect(inserted).toMatch(/INSERT INTO subastas/);
-      expect(inserted).toMatch(/INSERT INTO itemsCatalogo/);
+      expect(inserted).toMatch(/UPDATE solicitudesVenta\s+SET productoId/);
+      expect(inserted).not.toMatch(/INSERT INTO subastas/);
+      expect(inserted).not.toMatch(/INSERT INTO itemsCatalogo/);
     });
 
     it('rechaza condiciones -> 200 y devolucion con cargo', async () => {
