@@ -484,20 +484,37 @@ function normalizeHora(raw: unknown): string | null {
 export async function listProductosDisponibles(_req: AuthRequest, res: Response): Promise<void> {
   try {
     const pool = await connectDB();
+    // Una sola consulta: datos del producto + dueño + condiciones acordadas en la
+    // solicitud + cantidad de elementos (si es un conjunto) + una foto de portada.
     const result = await pool.request().query(`
       SELECT pr.identificador, pr.descripcionCatalogo, pr.descripcionCompleta, pr.duenio,
              per.nombre AS duenioNombre, per.apellido AS duenioApellido,
-             pr.esObraDisenador, pr.nombreArtistaDisenador,
-             s.identificador AS solicitudId, s.valorBase, s.comisionPropuesta, s.moneda
+             pr.esObraDisenador, pr.nombreArtistaDisenador, pr.fechaObjeto, pr.historiaObjeto,
+             s.identificador AS solicitudId, s.valorBase, s.comisionPropuesta, s.moneda,
+             (SELECT COUNT(*) FROM productoArticulos pa WHERE pa.producto = pr.identificador) AS cantidadElementos,
+             f.foto AS fotoPrincipalBin
       FROM productos pr
       LEFT JOIN solicitudesVenta s ON s.productoId = pr.identificador
       LEFT JOIN personas per ON per.identificador = pr.duenio
+      OUTER APPLY (SELECT TOP 1 foto FROM fotos WHERE producto = pr.identificador ORDER BY identificador) f
       WHERE pr.disponible = 'si'
         AND NOT EXISTS (SELECT 1 FROM itemsCatalogo ic WHERE ic.producto = pr.identificador)
       ORDER BY pr.identificador DESC
     `);
 
-    res.json({ success: true, data: result.recordset });
+    // El binario de la foto no debe salir crudo: se convierte a data URI base64.
+    const data = result.recordset.map((row: any) => {
+      const { fotoPrincipalBin, ...rest } = row;
+      return {
+        ...rest,
+        cantidadElementos: Number(rest.cantidadElementos || 0),
+        fotoPrincipal: fotoPrincipalBin
+          ? `data:image/jpeg;base64,${Buffer.from(fotoPrincipalBin).toString('base64')}`
+          : null,
+      };
+    });
+
+    res.json({ success: true, data });
   } catch (error) {
     console.error('Error listProductosDisponibles:', error);
     res.status(500).json({ success: false, error: 'Error interno del servidor' });

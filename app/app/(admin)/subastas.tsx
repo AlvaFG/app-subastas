@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable } from 'react-native';
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator, Pressable, Image } from 'react-native';
 import { Button, Input } from '../../src/components';
 import { colors, fonts, fontSizes, spacing, radius } from '../../src/theme';
 import adminApi from '../../src/services/adminApi';
@@ -14,6 +14,10 @@ interface ProductoDisponible {
   valorBase?: number;
   comisionPropuesta?: number;
   moneda?: string;
+  fotoPrincipal?: string | null;
+  cantidadElementos?: number;
+  esObraDisenador?: string;
+  nombreArtistaDisenador?: string;
 }
 
 const CATEGORIAS = ['comun', 'especial', 'plata', 'oro', 'platino'] as const;
@@ -106,10 +110,19 @@ export default function AdminSubastasScreen() {
               <View style={[styles.checkbox, checked && styles.checkboxOn]}>
                 {checked && <Text style={styles.checkMark}>✓</Text>}
               </View>
+              {p.fotoPrincipal ? (
+                <Image source={{ uri: p.fotoPrincipal }} style={styles.prodThumb} />
+              ) : (
+                <View style={[styles.prodThumb, styles.prodThumbEmpty]} />
+              )}
               <View style={styles.prodInfo}>
                 <Text style={styles.prodTitle}>#{p.identificador} · {p.descripcionCatalogo}</Text>
                 <Text style={styles.prodMeta}>
                   Dueño: {p.duenioNombre || '-'} {p.duenioApellido || ''} · Base: {p.valorBase ?? '-'} {p.moneda || 'ARS'}
+                </Text>
+                <Text style={styles.prodMeta}>
+                  {p.cantidadElementos && p.cantidadElementos > 1 ? `Conjunto de ${p.cantidadElementos} elementos` : 'Bien simple'}
+                  {p.esObraDisenador === 'si' ? ` · Obra de ${p.nombreArtistaDisenador || 'diseñador'}` : ''}
                 </Text>
               </View>
             </Pressable>
@@ -151,6 +164,8 @@ const styles = StyleSheet.create({
   checkbox: { width: 24, height: 24, borderRadius: radius.sm, borderWidth: 1.5, borderColor: colors.textMuted, alignItems: 'center', justifyContent: 'center' },
   checkboxOn: { backgroundColor: colors.auctionGold, borderColor: colors.auctionGold },
   checkMark: { color: colors.ink, fontSize: fontSizes.sm, fontFamily: fonts.bodySemibold },
+  prodThumb: { width: 48, height: 48, borderRadius: radius.sm, backgroundColor: colors.border },
+  prodThumbEmpty: { alignItems: 'center', justifyContent: 'center' },
   prodInfo: { flex: 1 },
   prodTitle: { fontFamily: fonts.bodySemibold, fontSize: fontSizes.base, color: colors.textPrimary },
   prodMeta: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.textSecondary },
