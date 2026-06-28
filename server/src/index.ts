@@ -28,6 +28,9 @@ const allowedOrigins = process.env.CORS_ORIGINS
   : ['http://localhost:8081', 'http://localhost:19006'];
 
 const app = express();
+// La app corre detras de nginx (reverse proxy) en la VM. Sin esto, express-rate-limit
+// rechaza el header X-Forwarded-For (ERR_ERL_UNEXPECTED_X_FORWARDED_FOR) y rompe /auth.
+app.set('trust proxy', 1);
 const server = http.createServer(app);
 const io = new SocketServer(server, {
   cors: { origin: allowedOrigins, methods: ['GET', 'POST'], credentials: true },
@@ -52,8 +55,8 @@ const authLimiter = rateLimit({
 app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(helmet());
 app.use(morgan('dev'));
-app.use(express.json({ limit: '25mb' }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 // Health check
 app.get('/api/health', async (_req, res) => {

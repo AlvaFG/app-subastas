@@ -3,6 +3,7 @@ import {
   View, Text, StyleSheet, ScrollView, Switch, FlatList, TouchableOpacity, Image,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import { compressToBase64 } from '../../src/utils/image';
 import { Button, Input, Badge, Modal } from '../../src/components';
 import { colors, fonts, fontSizes, spacing, radius, shadows } from '../../src/theme';
 import api from '../../src/services/api';
@@ -67,6 +68,11 @@ export default function VenderScreen() {
   const [historiaObjeto, setHistoriaObjeto] = useState('');
   const [declaracion, setDeclaracion] = useState(false);
   const [origenLicito, setOrigenLicito] = useState(false);
+  // Un bien puede ser simple (ej: una tele) o un conjunto de varios elementos (ej:
+  // juego de vasijas / te). En ambos casos es UNA pieza con UN precio base (TPO §76):
+  // el precio aplica al conjunto completo, no por elemento.
+  const [esConjunto, setEsConjunto] = useState(false);
+  const [fotosBien, setFotosBien] = useState<FotoSeleccionada[]>([]);
   const [articulos, setArticulos] = useState<ArticuloSolicitud[]>([
     { id: 'articulo-1', descripcion: '', fotos: [] },
   ]);
@@ -116,7 +122,9 @@ export default function VenderScreen() {
     setArticulos((prev) => (prev.length > 1 ? prev.filter((articulo) => articulo.id !== articuloId) : prev));
   };
 
-  const pickArticuloPhotos = async (articuloId: string) => {
+  // Selector generico: abre la galeria, comprime/reescala cada foto (clave en web,
+  // donde el picker ignora `quality`) y entrega las fotos resultantes al caller.
+  const pickPhotos = async (onPicked: (fotos: FotoSeleccionada[]) => void) => {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ['images'],
       allowsMultipleSelection: true,
@@ -125,17 +133,25 @@ export default function VenderScreen() {
     });
 
     if (!result.canceled) {
-      const newPhotos = result.assets
-        .filter((asset) => !!asset.base64)
-        .map((asset) => ({ uri: asset.uri, base64: asset.base64! }));
-
-      setArticulos((prev) => prev.map((articulo) => (
-        articulo.id === articuloId
-          ? { ...articulo, fotos: [...articulo.fotos, ...newPhotos].slice(0, 12) }
-          : articulo
-      )));
+      const newPhotos = (await Promise.all(
+        result.assets.map(async (asset) => {
+          const base64 = (await compressToBase64(asset.uri)) ?? asset.base64 ?? null;
+          return base64 ? { uri: asset.uri, base64 } : null;
+        }),
+      )).filter((foto): foto is FotoSeleccionada => !!foto);
+      onPicked(newPhotos);
     }
   };
+
+  const pickBienPhotos = () =>
+    pickPhotos((fotos) => setFotosBien((prev) => [...prev, ...fotos].slice(0, 12)));
+
+  const pickArticuloPhotos = (articuloId: string) =>
+    pickPhotos((fotos) => setArticulos((prev) => prev.map((articulo) => (
+      articulo.id === articuloId
+        ? { ...articulo, fotos: [...articulo.fotos, ...fotos].slice(0, 12) }
+        : articulo
+    ))));
 
   const formatMoney = (value: number) => new Intl.NumberFormat('es-AR', {
     style: 'currency',
@@ -151,14 +167,20 @@ export default function VenderScreen() {
 
   const handleSubmit = async () => {
     if (!descripcion) { notify('Error', 'Ingrese una descripcion del bien'); return; }
-    if (articulos.length === 0) { notify('Error', 'Agregue al menos un articulo'); return; }
-    if (articulos.some((articulo) => !articulo.descripcion.trim())) { notify('Error', 'Cada articulo debe tener descripcion'); return; }
-    if (articulos.some((articulo) => articulo.fotos.length === 0)) { notify('Error', 'Cada articulo debe tener al menos una foto'); return; }
-    const totalFotos = articulos.reduce((acumulado, articulo) => acumulado + articulo.fotos.length, 0);
-    if (totalFotos < 6) { notify('Error', `Debe subir al menos 6 fotos en total (tiene ${totalFotos})`); return; }
     if (!precioBase) { notify('Error', 'Ingrese un precio base sugerido'); return; }
     if (esObraDisenador && !nombreArtistaDisenador.trim()) { notify('Error', 'Ingrese nombre de artista/diseniador'); return; }
     if (!declaracion) { notify('Error', 'Debe declarar que el bien le pertenece'); return; }
+
+    // TPO: minimo 6 fotos del bien. Simple = fotos del bien; conjunto = fotos
+    // repartidas entre los elementos (cada elemento con al menos una).
+    if (esConjunto) {
+      if (articulos.some((articulo) => !articulo.descripcion.trim())) { notify('Error', 'Cada elemento debe tener descripcion'); return; }
+      if (articulos.some((articulo) => articulo.fotos.length === 0)) { notify('Error', 'Cada elemento debe tener al menos una foto'); return; }
+      const totalFotos = articulos.reduce((acumulado, articulo) => acumulado + articulo.fotos.length, 0);
+      if (totalFotos < 6) { notify('Error', `Debe subir al menos 6 fotos en total entre los elementos (tiene ${totalFotos})`); return; }
+    } else {
+      if (fotosBien.length < 6) { notify('Error', `Debe subir al menos 6 fotos del bien (tiene ${fotosBien.length})`); return; }
+    }
 
     setLoading(true);
     try {
@@ -171,10 +193,16 @@ export default function VenderScreen() {
         nombreArtistaDisenador: esObraDisenador ? nombreArtistaDisenador : null,
         fechaObjeto: esObraDisenador ? (fechaObjeto || null) : null,
         historiaObjeto: esObraDisenador ? (historiaObjeto || null) : null,
-        articulos: articulos.map((articulo) => ({
-          descripcion: articulo.descripcion.trim(),
-          fotos: articulo.fotos.map((foto) => foto.base64),
-        })),
+        // Conjunto: se mandan los elementos (cada uno con sus fotos). Bien simple:
+        // se mandan las fotos del bien directamente (el backend acepta ambas formas).
+        ...(esConjunto
+          ? {
+              articulos: articulos.map((articulo) => ({
+                descripcion: articulo.descripcion.trim(),
+                fotos: articulo.fotos.map((foto) => foto.base64),
+              })),
+            }
+          : { fotos: fotosBien.map((foto) => foto.base64) }),
         declaracionPropiedad: 'si',
         origenLicito: origenLicito ? 'si' : 'no',
       });
@@ -188,6 +216,9 @@ export default function VenderScreen() {
       setFechaObjeto('');
       setHistoriaObjeto('');
       setDeclaracion(false);
+      setOrigenLicito(false);
+      setEsConjunto(false);
+      setFotosBien([]);
       setArticulos([{ id: 'articulo-1', descripcion: '', fotos: [] }]);
       setTab('mis');
       fetchSolicitudes();
@@ -373,45 +404,77 @@ export default function VenderScreen() {
             </>
           )}
 
-          {/* Articulos */}
-          <View style={styles.sectionHeaderRow}>
-            <Text style={styles.sectionTitle}>Articulos del lote</Text>
-            <Button title="Agregar articulo" variant="outline" size="sm" onPress={addArticulo} />
+          {/* Tipo de bien: simple (una tele) o conjunto de varios elementos (juego de vasijas) */}
+          <View style={styles.declarationRow}>
+            <Switch
+              value={esConjunto}
+              onValueChange={setEsConjunto}
+              trackColor={{ true: colors.auctionGold, false: colors.border }}
+              thumbColor={colors.ivory}
+            />
+            <Text style={styles.declarationText}>Es un conjunto de varios elementos (ej: juego de vasijas)</Text>
           </View>
 
-          {articulos.map((articulo, index) => (
-            <View key={articulo.id} style={styles.articuloCard}>
-              <View style={styles.articuloHeader}>
-                <Text style={styles.articuloTitle}>Articulo {index + 1}</Text>
-                <Button title="Eliminar" variant="ghost" size="sm" onPress={() => removeArticulo(articulo.id)} disabled={articulos.length === 1} />
+          {esConjunto ? (
+            <>
+              <View style={styles.sectionHeaderRow}>
+                <Text style={styles.sectionTitle}>Elementos del conjunto</Text>
+                <Button title="Agregar elemento" variant="outline" size="sm" onPress={addArticulo} />
               </View>
 
-              <Input
-                label="Descripcion del articulo"
-                placeholder="Ej: Taza de porcelana con dorado"
-                value={articulo.descripcion}
-                onChangeText={(value) => updateArticulo(articulo.id, { descripcion: value })}
-                multiline
-              />
+              {articulos.map((articulo, index) => (
+                <View key={articulo.id} style={styles.articuloCard}>
+                  <View style={styles.articuloHeader}>
+                    <Text style={styles.articuloTitle}>Elemento {index + 1}</Text>
+                    <Button title="Eliminar" variant="ghost" size="sm" onPress={() => removeArticulo(articulo.id)} disabled={articulos.length === 1} />
+                  </View>
 
-              <View style={styles.photoInfo}>
-                <Text style={styles.photoCount}>{articulo.fotos.length} fotos</Text>
-                <Button title="Agregar fotos" variant="outline" size="sm" onPress={() => pickArticuloPhotos(articulo.id)} />
+                  <Input
+                    label="Descripcion del elemento"
+                    placeholder="Ej: Vasija grande con asas"
+                    value={articulo.descripcion}
+                    onChangeText={(value) => updateArticulo(articulo.id, { descripcion: value })}
+                    multiline
+                  />
+
+                  <View style={styles.photoInfo}>
+                    <Text style={styles.photoCount}>{articulo.fotos.length} fotos</Text>
+                    <Button title="Agregar fotos" variant="outline" size="sm" onPress={() => pickArticuloPhotos(articulo.id)} />
+                  </View>
+
+                  {articulo.fotos.length > 0 && (
+                    <ScrollView horizontal style={styles.photoStrip}>
+                      {articulo.fotos.map((foto, photoIndex) => (
+                        <View key={`${articulo.id}-${photoIndex}`} style={styles.photoThumb}>
+                          <Image source={{ uri: foto.uri }} style={styles.photoImage} />
+                        </View>
+                      ))}
+                    </ScrollView>
+                  )}
+                </View>
+              ))}
+
+              <Text style={styles.helperText}>El precio base es por el CONJUNTO completo, no por elemento. Subi al menos 6 fotos en total entre todos los elementos.</Text>
+            </>
+          ) : (
+            <>
+              <View style={styles.sectionHeaderRow}>
+                <Text style={styles.sectionTitle}>Fotos del bien</Text>
+                <Button title="Agregar fotos" variant="outline" size="sm" onPress={pickBienPhotos} />
               </View>
-
-              {articulo.fotos.length > 0 && (
+              <Text style={styles.photoCount}>{fotosBien.length} fotos (minimo 6)</Text>
+              {fotosBien.length > 0 && (
                 <ScrollView horizontal style={styles.photoStrip}>
-                  {articulo.fotos.map((foto, photoIndex) => (
-                    <View key={`${articulo.id}-${photoIndex}`} style={styles.photoThumb}>
+                  {fotosBien.map((foto, photoIndex) => (
+                    <View key={`bien-${photoIndex}`} style={styles.photoThumb}>
                       <Image source={{ uri: foto.uri }} style={styles.photoImage} />
                     </View>
                   ))}
                 </ScrollView>
               )}
-            </View>
-          ))}
-
-          <Text style={styles.helperText}>Cada articulo necesita su propia descripcion y al menos una foto. El precio base aplica al lote completo.</Text>
+              <Text style={styles.helperText}>Subi al menos 6 fotos del bien desde distintos angulos.</Text>
+            </>
+          )}
 
           {/* T504: Declaration checkbox */}
           <View style={styles.declarationRow}>

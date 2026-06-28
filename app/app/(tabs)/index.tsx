@@ -32,9 +32,16 @@ export default function SubastasScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [filtro, setFiltro] = useState<string>('todas');
   const abortRef = useRef<AbortController | null>(null);
+  const { width } = useWindowDimensions();
   // En pantallas anchas la navbar superior ya muestra el logo + marca,
   // asi que evitamos duplicar el header in-page.
-  const isWide = useWindowDimensions().width >= 768;
+  const isWide = width >= 768;
+  // Grid responsive: en web/pantallas anchas mostramos varias subastas por fila
+  // con cards de ancho acotado (en mobile queda 1 columna a ancho completo).
+  const numColumns = width >= 1700 ? 4 : width >= 1280 ? 3 : width >= 768 ? 2 : 1;
+  const cardWidth = numColumns > 1
+    ? Math.floor((width - spacing.lg * 2 - spacing.md * (numColumns - 1)) / numColumns)
+    : undefined;
 
   const fetchSubastas = useCallback(async () => {
     // Cancela cualquier request en vuelo antes de iniciar uno nuevo
@@ -103,7 +110,7 @@ export default function SubastasScreen() {
 
   const renderSubasta = ({ item }: { item: Subasta }) => (
     <TouchableOpacity
-      style={[styles.subastaCard, shadows.md]}
+      style={[styles.subastaCard, shadows.md, cardWidth ? { width: cardWidth } : null]}
       activeOpacity={0.8}
       onPress={() => router.push(`/subasta/${item.identificador}`)}
     >
@@ -187,9 +194,12 @@ export default function SubastasScreen() {
         </View>
       ) : (
         <FlatList
+          key={numColumns}
           data={subastas}
           keyExtractor={(item) => item.identificador.toString()}
           renderItem={renderSubasta}
+          numColumns={numColumns}
+          columnWrapperStyle={numColumns > 1 ? styles.columnWrapper : undefined}
           contentContainerStyle={styles.list}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.auctionGold} />}
           ListEmptyComponent={
@@ -212,6 +222,7 @@ const styles = StyleSheet.create({
   filterText: { fontFamily: fonts.bodyMedium, fontSize: fontSizes.sm, color: colors.textSecondary },
   filterTextActive: { color: colors.ink },
   list: { paddingHorizontal: spacing.lg, paddingBottom: spacing['3xl'], gap: spacing.md },
+  columnWrapper: { gap: spacing.md, alignItems: 'flex-start' },
   skeletons: { padding: spacing.lg, gap: spacing.md },
   subastaCard: { backgroundColor: colors.ivory, borderRadius: radius.md, overflow: 'hidden' },
   photoBanner: { width: '100%', aspectRatio: 16 / 9, backgroundColor: colors.parchment, position: 'relative' },
