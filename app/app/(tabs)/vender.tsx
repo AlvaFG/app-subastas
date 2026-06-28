@@ -3,6 +3,7 @@ import {
   View, Text, StyleSheet, ScrollView, Switch, FlatList, TouchableOpacity, Image,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import { compressToBase64 } from '../../src/utils/image';
 import { Button, Input, Badge, Modal } from '../../src/components';
 import { colors, fonts, fontSizes, spacing, radius, shadows } from '../../src/theme';
 import api from '../../src/services/api';
@@ -125,9 +126,14 @@ export default function VenderScreen() {
     });
 
     if (!result.canceled) {
-      const newPhotos = result.assets
-        .filter((asset) => !!asset.base64)
-        .map((asset) => ({ uri: asset.uri, base64: asset.base64! }));
+      // Comprimir/reescalar cada foto (clave en web: el picker no aplica `quality`).
+      // Si la compresion falla, se usa el base64 original como fallback.
+      const newPhotos = (await Promise.all(
+        result.assets.map(async (asset) => {
+          const base64 = (await compressToBase64(asset.uri)) ?? asset.base64 ?? null;
+          return base64 ? { uri: asset.uri, base64 } : null;
+        }),
+      )).filter((foto): foto is { uri: string; base64: string } => !!foto);
 
       setArticulos((prev) => prev.map((articulo) => (
         articulo.id === articuloId
