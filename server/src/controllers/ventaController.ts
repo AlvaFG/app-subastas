@@ -2,7 +2,6 @@ import { Response } from 'express';
 import sql from 'mssql';
 import { AuthRequest } from '../middleware/auth';
 import { connectDB } from '../models/db';
-import { resolveAuctionCategoryByPriceBase } from '../utils/category';
 import {
   getInsurancePolicyUpgradeDifference,
   getNextInsurancePolicyByCurrentNroPoliza,
@@ -712,7 +711,12 @@ export async function responderSolicitud(req: AuthRequest, res: Response): Promi
       console.log(`[VENTA] Producto creado: ${productoId}`);
   const articulosSolicitud = await loadSolicitudArticulos(pool, Number(id), solicitud.descripcion);
 
-      // Crear una subasta nueva por cada solicitud aceptada para que se refleje como nueva entrada.
+      // Correccion 2: al aceptar las condiciones el bien NO entra automaticamente en
+      // una subasta. El producto queda DISPONIBLE (productos.disponible = 'si', ya
+      // seteado al crearlo) y pasa a la lista de productos que el administrador usa
+      // para ARMAR una subasta eligiendo uno o varios productos. La empresa ya definio
+      // precio base (valorBase) y comision (comisionPropuesta) en la solicitud; esos
+      // valores se aplican al item cuando el admin crea la subasta.
       const precioBaseItem = solicitud.valorBase || 100.00;
 
       const polizaAsignada = resolveInsurancePolicyByPriceBase(precioBaseItem, solicitud.moneda);
@@ -736,68 +740,6 @@ export async function responderSolicitud(req: AuthRequest, res: Response): Promi
           UPDATE solicitudesVenta
           SET productoId = @productoId
           WHERE identificador = @id
-        `);
-
-      const fechaSubasta = new Date();
-      fechaSubasta.setDate(fechaSubasta.getDate() + 11);
-      const categoriaSubasta = resolveAuctionCategoryByPriceBase(precioBaseItem, solicitud.moneda);
-
-      console.log(`[VENTA] Creando nueva subasta para fecha ${fechaSubasta.toISOString().split('T')[0]} con categoria ${categoriaSubasta}`);
-      const subastaResult = await pool.request()
-        .input('fecha', fechaSubasta.toISOString().split('T')[0])
-        .input('hora', normalizeHoraSubasta(solicitud.horaSubasta))
-        .input('estado', 'abierta')
-        .input('ubicacion', 'Centro de Remates')
-        .input('tieneDeposito', 'si')
-        .input('seguridadPropia', 'si')
-        .input('categoria', categoriaSubasta)
-        .input('moneda', solicitud.moneda === 'USD' ? 'USD' : 'ARS')
-        .query(`
-          INSERT INTO subastas (fecha, hora, estado, ubicacion, tieneDeposito, seguridadPropia, categoria, moneda)
-          OUTPUT INSERTED.identificador
-          VALUES (@fecha, @hora, @estado, @ubicacion, @tieneDeposito, @seguridadPropia, @categoria, @moneda)
-        `);
-
-      const subastaId = subastaResult.recordset[0].identificador;
-      console.log(`[VENTA] Subasta creada: ${subastaId}`);
-
-      // Crear catálogo si no existe
-      const catalogoCheck = await pool.request()
-        .input('subastaId', subastaId)
-        .query('SELECT TOP 1 identificador FROM catalogos WHERE subasta = @subastaId');
-
-      let catalogoId = catalogoCheck.recordset[0]?.identificador;
-      console.log(`[VENTA] Busqueda de catalogo para subasta ${subastaId}: ${catalogoId ? 'ENCONTRADO' : 'NO ENCONTRADO'}`);
-
-      if (!catalogoId) {
-        console.log(`[VENTA] Creando catalogo`);
-        const catalogoResult = await pool.request()
-          .input('subasta', subastaId)
-          .input('descripcion', 'Catálogo General')
-          .input('responsable', 1)
-          .query(`
-            INSERT INTO catalogos (subasta, descripcion, responsable)
-            OUTPUT INSERTED.identificador
-            VALUES (@subasta, @descripcion, @responsable)
-          `);
-
-        catalogoId = catalogoResult.recordset[0].identificador;
-        console.log(`[VENTA] Catalogo creado: ${catalogoId}`);
-      }
-
-      // Crear item de catálogo usando precio base y la comision definida por la EMPRESA.
-      const comisionItem = Number.isFinite(Number(solicitud.comisionPropuesta)) && Number(solicitud.comisionPropuesta) >= 0
-        ? Number(solicitud.comisionPropuesta)
-        : +(precioBaseItem * 0.1).toFixed(2);
-      console.log(`[VENTA] Creando item con precio ${precioBaseItem}, comision ${comisionItem}`);
-      await pool.request()
-        .input('catalogo', catalogoId)
-        .input('producto', productoId)
-        .input('precioBase', precioBaseItem)
-        .input('comision', comisionItem)
-        .query(`
-          INSERT INTO itemsCatalogo (catalogo, producto, precioBase, comision)
-          VALUES (@catalogo, @producto, @precioBase, @comision)
         `);
 
       for (const [index, articulo] of articulosSolicitud.entries()) {

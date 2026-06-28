@@ -5,6 +5,7 @@ import {
   listMediosPago, verificarMedioPago,
   listSolicitudes, inspeccionarSolicitud, responderSolicitudAdmin,
   crearMultaAdmin,
+  listProductosDisponibles, listSubastasAdmin, crearSubastaAdmin,
 } from '../controllers/adminController';
 import { authGuard, adminGuard } from '../middleware/auth';
 import { validate } from '../middleware/validate';
@@ -44,6 +45,18 @@ router.put('/venta/solicitudes/:id/respuesta',
   body('acepta').isIn(['si', 'no']).withMessage('Debe indicar si acepta o no'),
   validate,
   responderSolicitudAdmin,
+);
+
+// Armado de subastas (Correccion 2): el admin elige productos disponibles.
+router.get('/productos-disponibles', listProductosDisponibles);
+router.get('/subastas', listSubastasAdmin);
+router.post('/subastas',
+  body('fechaFin').notEmpty().withMessage('fechaFin requerida'),
+  body('horaFin').notEmpty().withMessage('horaFin requerida'),
+  body('categoria').isIn(['comun', 'especial', 'plata', 'oro', 'platino']).withMessage('Categoria invalida'),
+  body('productos').isArray({ min: 1 }).withMessage('Debe seleccionar al menos un producto'),
+  validate,
+  crearSubastaAdmin,
 );
 
 // Multas (alta manual)

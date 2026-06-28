@@ -33,6 +33,7 @@ export default function AdminLayout() {
       <Stack.Screen name="clientes" options={{ title: 'Clientes' }} />
       <Stack.Screen name="medios" options={{ title: 'Medios de pago' }} />
       <Stack.Screen name="solicitudes" options={{ title: 'Solicitudes de venta' }} />
+      <Stack.Screen name="subastas" options={{ title: 'Armar subasta' }} />
       <Stack.Screen name="multas" options={{ title: 'Multas' }} />
     </Stack>
   );

@@ -15,7 +15,7 @@ import ventaRoutes from './routes/venta';
 import estadisticasRoutes from './routes/estadisticas';
 import notificacionesRoutes from './routes/notificaciones';
 import rateLimit from 'express-rate-limit';
-import { setupAuctionSocket } from './socket/auctionHandler';
+import { setupAuctionSocket, scheduleOpenAuctionsFromDB } from './socket/auctionHandler';
 import { setupSwagger } from './swagger';
 import { validateEnv } from './config/env';
 import { startScheduler } from './services/scheduler';
@@ -81,6 +81,12 @@ setupSwagger(app);
 
 // Socket.IO — Auction handler
 setupAuctionSocket(io);
+
+// Correccion 1: reprogramar el cierre de las subastas abiertas con fin definido
+// (sobrevive a reinicios del server). No-op en test.
+if (process.env.NODE_ENV !== 'test') {
+  scheduleOpenAuctionsFromDB().catch((e) => console.error('Error programando cierres de subastas:', e));
+}
 
 // Background scheduler (multas vencidas 72hs -> justicia). No-op en test.
 startScheduler();
