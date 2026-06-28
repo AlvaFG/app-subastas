@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
-  View, Text, StyleSheet, ScrollView, Image, Dimensions,
+  View, Text, StyleSheet, ScrollView, Image, useWindowDimensions,
 } from 'react-native';
 import { useLocalSearchParams, Stack } from 'expo-router';
 import { Badge, Skeleton, Button } from '../../src/components';
@@ -8,7 +8,10 @@ import { CategoryName } from '../../src/components/Badge';
 import { colors, fonts, fontSizes, spacing, radius, shadows } from '../../src/theme';
 import api from '../../src/services/api';
 
-const { width } = Dimensions.get('window');
+// Ancho maximo de la imagen/galeria y del contenido (en web no debe ocupar toda la
+// pantalla). En mobile se usa el ancho real de la ventana.
+const MEDIA_MAX = 640;
+const CONTENT_MAX = 760;
 
 interface ItemDetalle {
   identificador: number;
@@ -42,6 +45,10 @@ export default function ItemDetalleScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const [item, setItem] = useState<ItemDetalle | null>(null);
   const [loading, setLoading] = useState(true);
+  const { width: winWidth } = useWindowDimensions();
+  const mediaWidth = Math.min(winWidth, MEDIA_MAX);
+  const mediaHeight = Math.round(mediaWidth * 0.75);
+  const contentMaxWidth = Math.min(winWidth, CONTENT_MAX);
 
   useEffect(() => {
     (async () => {
@@ -60,7 +67,7 @@ export default function ItemDetalleScreen() {
     return (
       <View style={styles.container}>
         <Stack.Screen options={{ headerShown: true, title: 'Cargando...' }} />
-        <Skeleton width={width} height={width * 0.75} borderRadius={0} />
+        <Skeleton width={mediaWidth} height={mediaHeight} borderRadius={0} style={{ alignSelf: 'center' }} />
         <View style={{ padding: spacing.lg }}>
           <Skeleton width="60%" height={28} />
           <Skeleton width="40%" height={24} style={{ marginTop: spacing.sm }} />
@@ -95,11 +102,11 @@ export default function ItemDetalleScreen() {
       <Stack.Screen options={{ headerShown: true, title: `Pieza #${item.identificador}` }} />
 
       {/* Image gallery */}
-      <View style={styles.gallery}>
+      <View style={[styles.gallery, { width: mediaWidth, height: mediaHeight, alignSelf: 'center' }]}>
         {item.fotos.length > 0 ? (
           <ScrollView horizontal pagingEnabled showsHorizontalScrollIndicator={false}>
             {item.fotos.map((foto, index) => (
-              <Image key={index} source={{ uri: foto }} style={styles.galleryImage} resizeMode="cover" />
+              <Image key={index} source={{ uri: foto }} style={{ width: mediaWidth, height: mediaHeight }} resizeMode="cover" />
             ))}
           </ScrollView>
         ) : (
@@ -109,7 +116,7 @@ export default function ItemDetalleScreen() {
         )}
       </View>
 
-      <View style={styles.content}>
+      <View style={[styles.content, { maxWidth: contentMaxWidth, alignSelf: 'center', width: '100%' }]}>
         {/* Title + Category */}
         <View style={styles.titleRow}>
           <Text style={styles.title}>{item.descripcionCatalogo}</Text>
@@ -194,8 +201,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.ivory },
   centered: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: colors.ivory },
   errorText: { fontFamily: fonts.body, fontSize: fontSizes.base, color: colors.alertEmber },
-  gallery: { width, aspectRatio: 4 / 3, backgroundColor: colors.parchment },
-  galleryImage: { width, height: width * 0.75 },
+  gallery: { backgroundColor: colors.parchment },
   imagePlaceholder: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   imageCount: { fontFamily: fonts.bodyMedium, fontSize: fontSizes.sm, color: colors.textMuted },
   content: { padding: spacing.lg },
