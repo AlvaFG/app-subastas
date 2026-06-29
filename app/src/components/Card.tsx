@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, Image, StyleSheet, TouchableOpacity } from 'react-native';
+import { View, Text, Image, StyleSheet, TouchableOpacity, Dimensions } from 'react-native';
 import Animated, {
   useAnimatedStyle,
   useSharedValue,
@@ -9,6 +9,11 @@ import { colors, fonts, fontSizes, radius, spacing, shadows, duration } from '..
 import { Badge, CategoryName } from './Badge';
 
 const AnimatedTouchable = Animated.createAnimatedComponent(TouchableOpacity);
+
+const { width: SCREEN_WIDTH } = Dimensions.get('window');
+// Card width: 2 columns with gaps and padding accounted for
+const CARD_WIDTH = (SCREEN_WIDTH - spacing.md * 2 - spacing.md) / 2;
+const IS_SMALL = CARD_WIDTH < 160;
 
 interface CardProps {
   title: string;
@@ -72,10 +77,15 @@ export function Card({
       <View style={styles.content}>
         <Text style={styles.title} numberOfLines={2}>{title}</Text>
         {formattedPrice && (
-          <Text style={styles.price}>{formattedPrice}</Text>
+          <Text style={styles.price} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.7}>
+            {formattedPrice}
+          </Text>
         )}
-        {description && (
+        {description && !IS_SMALL && (
           <Text style={styles.description} numberOfLines={2}>{description}</Text>
+        )}
+        {description && IS_SMALL && (
+          <Text style={styles.descriptionSmall} numberOfLines={1}>{description}</Text>
         )}
       </View>
     </AnimatedTouchable>
@@ -87,9 +97,10 @@ const styles = StyleSheet.create({
     backgroundColor: colors.ivory,
     borderRadius: radius.md,
     overflow: 'hidden',
+    flex: 1,
   },
   imageWrapper: {
-    aspectRatio: 4 / 3,
+    aspectRatio: 1,
     backgroundColor: colors.parchment,
   },
   image: {
@@ -103,32 +114,40 @@ const styles = StyleSheet.create({
   },
   placeholderText: {
     fontFamily: fonts.body,
-    fontSize: fontSizes.sm,
+    fontSize: fontSizes.xs,
     color: colors.textMuted,
   },
   badgeWrapper: {
     position: 'absolute',
-    top: spacing.sm,
-    right: spacing.sm,
+    top: spacing.xs,
+    right: spacing.xs,
   },
   content: {
-    padding: spacing.md,
+    padding: IS_SMALL ? spacing.sm : spacing.md,
+    gap: 2,
   },
   title: {
     fontFamily: fonts.headingSemibold,
-    fontSize: fontSizes.lg,
+    fontSize: IS_SMALL ? fontSizes.sm : fontSizes.base,
     color: colors.textPrimary,
+    lineHeight: IS_SMALL ? 18 : 22,
   },
   price: {
     fontFamily: fonts.display,
-    fontSize: fontSizes.xl,
+    fontSize: IS_SMALL ? fontSizes.base : fontSizes.xl,
     color: colors.auctionGold,
-    marginTop: spacing.xs,
+    marginTop: 2,
   },
   description: {
     fontFamily: fonts.body,
     fontSize: fontSizes.sm,
     color: colors.textSecondary,
-    marginTop: spacing.xs,
+    marginTop: 2,
+  },
+  descriptionSmall: {
+    fontFamily: fonts.body,
+    fontSize: fontSizes.xs,
+    color: colors.textSecondary,
+    marginTop: 2,
   },
 });
