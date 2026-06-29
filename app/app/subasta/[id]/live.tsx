@@ -44,6 +44,13 @@ interface SocketAck<T = unknown> {
   code?: string;
 }
 
+const STATUS_OVERLAY_CONFIG: Record<ConnectionStatus, { title: string; subtitle: string; color: string }> = {
+  connecting:    { title: 'Conectando...',   subtitle: 'Uniéndote a la subasta en vivo',              color: '#F5A623' },
+  connected:     { title: 'Conectado',       subtitle: 'Estás en vivo',                                color: '#4CAF50' },
+  reconnecting:  { title: 'Reconectando...', subtitle: 'Conexión perdida, reestableciendo enlace...',  color: '#F5A623' },
+  disconnected:  { title: 'Sin conexión',    subtitle: 'No se puede conectar con la subasta',          color: '#E53935' },
+};
+
 const REASON_UI: Record<string, { title: string; color: string }> = {
   BLOCKED_INACTIVITY: { title: 'Cuenta bloqueada', color: colors.alertEmber },
   UNPAID_PENALTY: { title: 'Multa impaga', color: colors.alertEmber },
@@ -102,6 +109,8 @@ export default function LiveAuctionScreen() {
   const [cancellingPayment, setCancellingPayment] = useState(false);
 
   const bidTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const overlayTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [showStatusOverlay, setShowStatusOverlay] = useState(true);
   const connected = connectionStatus === 'connected';
 
   const priceScale = useSharedValue(1);
@@ -285,6 +294,23 @@ export default function LiveAuctionScreen() {
       }
     };
   }, [subastaId, applyNewBid, markItemSold]);
+
+  useEffect(() => {
+    if (overlayTimeoutRef.current) {
+      clearTimeout(overlayTimeoutRef.current);
+      overlayTimeoutRef.current = null;
+    }
+    setShowStatusOverlay(true);
+    if (connectionStatus === 'connected') {
+      overlayTimeoutRef.current = setTimeout(() => setShowStatusOverlay(false), 2000);
+    }
+    return () => {
+      if (overlayTimeoutRef.current) {
+        clearTimeout(overlayTimeoutRef.current);
+        overlayTimeoutRef.current = null;
+      }
+    };
+  }, [connectionStatus]);
 
   const handleBid = () => {
     if (isBidding || !selectedItem) return;
@@ -486,6 +512,22 @@ export default function LiveAuctionScreen() {
         </View>
       ) : null}
 
+      {/* Connection status overlay */}
+      {showStatusOverlay && (
+        <Pressable style={styles.statusOverlay} onPress={connectionStatus === 'connected' ? () => setShowStatusOverlay(false) : undefined}>
+          <View style={[styles.statusCard, { borderColor: STATUS_OVERLAY_CONFIG[connectionStatus].color }]}>
+            <View style={[styles.statusCircle, { backgroundColor: STATUS_OVERLAY_CONFIG[connectionStatus].color }]} />
+            <Text style={[styles.statusTitle, { color: STATUS_OVERLAY_CONFIG[connectionStatus].color }]}>
+              {STATUS_OVERLAY_CONFIG[connectionStatus].title}
+            </Text>
+            <Text style={styles.statusSubtitle}>{STATUS_OVERLAY_CONFIG[connectionStatus].subtitle}</Text>
+            {connectionStatus === 'connected' && (
+              <Text style={styles.statusDismiss}>Toca para cerrar</Text>
+            )}
+          </View>
+        </Pressable>
+      )}
+
       {/* Payment modal after winning */}
       <Modal visible={showPaymentModal} onClose={cancelPayment} title="Felicitaciones!" variant="bottom">
         <Text style={styles.wonText}>Ganaste la pieza!</Text>
@@ -581,4 +623,11 @@ const styles = StyleSheet.create({
   entregaRow: { flexDirection: 'row', gap: spacing.sm, marginTop: spacing.xs },
   flexBtn: { flex: 1 },
   seguroWarn: { fontFamily: fonts.body, fontSize: fontSizes.sm, color: colors.alertEmber, marginTop: spacing.xs },
+
+  statusOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.82)', justifyContent: 'center', alignItems: 'center', zIndex: 200 },
+  statusCard: { backgroundColor: colors.graphite, borderRadius: radius.lg, borderWidth: 2, padding: spacing['2xl'], alignItems: 'center', marginHorizontal: spacing.xl, gap: spacing.md, minWidth: 260 },
+  statusCircle: { width: 72, height: 72, borderRadius: 36 },
+  statusTitle: { fontFamily: fonts.display, fontSize: fontSizes['3xl'], textAlign: 'center' },
+  statusSubtitle: { fontFamily: fonts.body, fontSize: fontSizes.base, color: colors.textMuted, textAlign: 'center' },
+  statusDismiss: { fontFamily: fonts.body, fontSize: fontSizes.xs, color: colors.textMuted, marginTop: spacing.sm },
 });
